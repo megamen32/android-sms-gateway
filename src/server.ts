@@ -42,10 +42,12 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     for (const item of body.messages.slice(0, 100)) {
       if (!item || typeof item !== 'object') continue;
       const message = item as Record<string, unknown>;
-      if (!validPhone(message.number) || typeof message.body !== 'string' || typeof message.date !== 'number') continue;
-      const id = hash(`${message.number}:${message.date}:${message.body}`);
+      const from = message.number ?? message.address;
+      const receivedMs = typeof message.date === 'number' ? message.date : typeof message.date === 'string' ? Date.parse(message.date) : NaN;
+      if (!validPhone(from) || typeof message.body !== 'string' || !Number.isFinite(receivedMs)) continue;
+      const id = hash(`${from}:${receivedMs}:${message.body}`);
       if (inbound.some((stored) => stored.id === id)) continue;
-      inbound.unshift({ id, from: message.number, body: message.body.slice(0, 1600), receivedAt: new Date(message.date).toISOString() }); accepted += 1;
+      inbound.unshift({ id, from, body: message.body.slice(0, 1600), receivedAt: new Date(receivedMs).toISOString() }); accepted += 1;
     }
     inbound.splice(100); return json({ accepted });
   }

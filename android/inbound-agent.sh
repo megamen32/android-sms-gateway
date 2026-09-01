@@ -5,7 +5,7 @@ set -eu
 : "${DEVICE_TOKEN:?Set DEVICE_TOKEN to the device bearer token}"
 
 while true; do
-  payload="$(termux-sms-list -t inbox -l 100)"
+  payload="$(termux-sms-list -d -n -t inbox -l 100)"
   curl --fail --silent --show-error --max-time 20 \
     -H "Authorization: Bearer ${DEVICE_TOKEN}" \
     -H 'Content-Type: application/json' \
