@@ -1,0 +1,6 @@
+{
+  "name": "android-sms-gateway",
+  "private": false,
+  "type": "module",
+  "scripts": { "start": "bun src/server.ts", "check": "bun --check src/server.ts" }
+}
