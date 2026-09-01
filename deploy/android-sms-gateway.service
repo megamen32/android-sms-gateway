@@ -1,0 +1,21 @@
+[Unit]
+Description=Android SMS Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/android-sms-gateway
+EnvironmentFile=/etc/android-sms-gateway.env
+ExecStart=/home/roomhacker/bin/bun src/server.ts
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/opt/android-sms-gateway
+
+[Install]
+WantedBy=multi-user.target

@@ -8,6 +8,7 @@ if (!apiKey || !deviceToken || !serial) throw new Error('SMS_GATEWAY_API_KEY, SM
 
 type Verification = { id: string; to: string; hash: string; expiresAt: number; status: 'accepted_by_android' | 'verified'; attempts: number };
 type Inbound = { id: string; from: string; body: string; receivedAt: string };
+type OutboundMessage = { id: string; to: string; status: 'accepted_by_android' };
 const verifications = new Map<string, Verification>();
 const inbound: Inbound[] = [];
 const sends: number[] = []; const phoneSends = new Map<string, number[]>();
@@ -62,6 +63,21 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     const verification: Verification = { id, to: body.to, hash: hash(code), expiresAt: Date.now() + 300_000, status: 'accepted_by_android', attempts: 0 };
     try { await sendWithAndroid(body.to, `Your verification code: ${code}`); verifications.set(id, verification); return json({ id, status: verification.status, expiresAt: new Date(verification.expiresAt).toISOString() }, 201); }
     catch (error) { return json({ error: error instanceof Error ? error.message : 'send_failed' }, 503); }
+  }
+  if (request.method === 'POST' && url.pathname === '/v1/messages') {
+    const body = await request.json().catch(() => null) as { to?: unknown; body?: unknown } | null;
+    if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
+    if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
+      return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
+    }
+    if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
+    const message: OutboundMessage = { id: randomUUID(), to: body.to, status: 'accepted_by_android' };
+    try {
+      await sendWithAndroid(body.to, body.body.trim());
+      return json({ id: message.id, status: message.status }, 202);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : 'send_failed' }, 503);
+    }
   }
   const match = url.pathname.match(/^\/v1\/verifications\/([\w-]+)\/check$/);
   if (request.method === 'POST' && match) {
