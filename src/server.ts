@@ -2,11 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 
 const port = Number(process.env.PORT || 8787);
 const apiKey = process.env.SMS_GATEWAY_API_KEY;
+const deviceToken = process.env.SMS_GATEWAY_DEVICE_TOKEN;
 const serial = process.env.ANDROID_SERIAL;
-if (!apiKey || !serial) throw new Error('SMS_GATEWAY_API_KEY and ANDROID_SERIAL are required');
+if (!apiKey || !deviceToken || !serial) throw new Error('SMS_GATEWAY_API_KEY, SMS_GATEWAY_DEVICE_TOKEN and ANDROID_SERIAL are required');
 
 type Verification = { id: string; to: string; hash: string; expiresAt: number; status: 'accepted_by_android' | 'verified'; attempts: number };
+type Inbound = { id: string; from: string; body: string; receivedAt: string };
 const verifications = new Map<string, Verification>();
+const inbound: Inbound[] = [];
 const sends: number[] = []; const phoneSends = new Map<string, number[]>();
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -31,8 +34,24 @@ function allow(to: string) {
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
   const url = new URL(request.url);
   if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline() });
+  if (request.method === 'POST' && url.pathname === '/v1/device/inbound') {
+    if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
+    const body = await request.json().catch(() => null) as { messages?: unknown } | null;
+    if (!Array.isArray(body?.messages)) return json({ error: 'messages must be an array' }, 400);
+    let accepted = 0;
+    for (const item of body.messages.slice(0, 100)) {
+      if (!item || typeof item !== 'object') continue;
+      const message = item as Record<string, unknown>;
+      if (!validPhone(message.number) || typeof message.body !== 'string' || typeof message.date !== 'number') continue;
+      const id = hash(`${message.number}:${message.date}:${message.body}`);
+      if (inbound.some((stored) => stored.id === id)) continue;
+      inbound.unshift({ id, from: message.number, body: message.body.slice(0, 1600), receivedAt: new Date(message.date).toISOString() }); accepted += 1;
+    }
+    inbound.splice(100); return json({ accepted });
+  }
   if (request.headers.get('authorization') !== `Bearer ${apiKey}`) return json({ error: 'unauthorized' }, 401);
   if (request.method === 'GET' && url.pathname === '/v1/device') return json({ serial, online: await deviceOnline(), transport: 'adb-termux-api' });
+  if (request.method === 'GET' && url.pathname === '/v1/inbound') return json({ messages: inbound, retention: 'memory-only, maximum 100 messages' });
   if (request.method === 'POST' && url.pathname === '/v1/verifications') {
     const body = await request.json().catch(() => null) as { to?: unknown } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
