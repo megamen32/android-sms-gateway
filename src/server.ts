@@ -3,12 +3,13 @@ import { createHash, randomUUID } from 'node:crypto';
 const port = Number(process.env.PORT || 8787);
 const apiKey = process.env.SMS_GATEWAY_API_KEY;
 const deviceToken = process.env.SMS_GATEWAY_DEVICE_TOKEN;
-const serial = process.env.ANDROID_SERIAL;
-if (!apiKey || !deviceToken || !serial) throw new Error('SMS_GATEWAY_API_KEY, SMS_GATEWAY_DEVICE_TOKEN and ANDROID_SERIAL are required');
+const defaultSerial = process.env.ANDROID_SERIAL;
+if (!apiKey || !deviceToken || !defaultSerial) throw new Error('SMS_GATEWAY_API_KEY, SMS_GATEWAY_DEVICE_TOKEN and ANDROID_SERIAL are required');
 
-type Verification = { id: string; to: string; hash: string; expiresAt: number; status: 'accepted_by_android' | 'verified'; attempts: number };
+type Verification = { id: string; to: string; deviceSerial: string; hash: string; expiresAt: number; status: 'accepted_by_android' | 'verified'; attempts: number };
 type Inbound = { id: string; from: string; body: string; receivedAt: string };
-type OutboundMessage = { id: string; to: string; status: 'accepted_by_android' };
+type OutboundMessage = { id: string; to: string; deviceSerial: string; status: 'accepted_by_android' };
+type Device = { serial: string; state: string; model?: string };
 const verifications = new Map<string, Verification>();
 const inbound: Inbound[] = [];
 const sends: number[] = []; const phoneSends = new Map<string, number[]>();
@@ -17,9 +18,26 @@ const json = (body: unknown, status = 200) => Response.json(body, { status });
 const validPhone = (value: unknown): value is string => typeof value === 'string' && /^\+[1-9]\d{7,14}$/.test(value);
 const quoteInput = (value: string) => value.replace(/[^\p{L}\p{N} .,:;!?@_+\-]/gu, '').replace(/ /g, '%s');
 
-async function deviceOnline() { const result = await Bun.$`adb -s ${serial} get-state`.quiet().nothrow(); return result.exitCode === 0 && result.stdout.toString().trim() === 'device'; }
-async function sendWithAndroid(to: string, message: string) {
-  if (!await deviceOnline()) throw new Error('Android is offline');
+async function devices(): Promise<Device[]> {
+  const result = await Bun.$`adb devices -l`.quiet().nothrow();
+  if (result.exitCode !== 0) return [];
+  return result.stdout.toString().split('\n').slice(1).flatMap((line) => {
+    const [serial, state, ...details] = line.trim().split(/\s+/);
+    if (!serial || !state) return [];
+    const model = details.find((detail) => detail.startsWith('model:'))?.slice('model:'.length);
+    return [{ serial, state, ...(model ? { model } : {}) }];
+  });
+}
+async function deviceOnline(serial: string) { return (await devices()).some((device) => device.serial === serial && device.state === 'device'); }
+async function selectDevice(requested: unknown): Promise<{ serial?: string; error?: string; status?: number }> {
+  if (requested !== undefined && (typeof requested !== 'string' || !requested.trim())) return { error: 'device_serial must be a non-empty string', status: 400 };
+  const serial = typeof requested === 'string' ? requested.trim() : defaultSerial;
+  const device = (await devices()).find((item) => item.serial === serial);
+  if (!device) return { error: 'unknown_device_serial', status: 400 };
+  if (device.state !== 'device') return { error: 'requested_android_is_offline', status: 503 };
+  return { serial };
+}
+async function sendWithAndroid(serial: string, to: string, message: string) {
   const entered = await Bun.$`adb -s ${serial} shell input text ${quoteInput(`termux-sms-send -n ${to} ${message}`)}`.quiet().nothrow();
   if (entered.exitCode !== 0) throw new Error('Could not enter SMS command on Android');
   const run = await Bun.$`adb -s ${serial} shell input keyevent ENTER`.quiet().nothrow();
@@ -34,7 +52,7 @@ function allow(to: string) {
 
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
   const url = new URL(request.url);
-  if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline() });
+  if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline(defaultSerial) });
   if (request.method === 'POST' && url.pathname === '/v1/device/inbound') {
     if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
     const body = await request.json().catch(() => null) as { messages?: unknown } | null;
@@ -53,28 +71,33 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     inbound.splice(100); return json({ accepted });
   }
   if (request.headers.get('authorization') !== `Bearer ${apiKey}`) return json({ error: 'unauthorized' }, 401);
-  if (request.method === 'GET' && url.pathname === '/v1/device') return json({ serial, online: await deviceOnline(), transport: 'adb-termux-api' });
+  if (request.method === 'GET' && url.pathname === '/v1/device') return json({ serial: defaultSerial, online: await deviceOnline(defaultSerial), transport: 'adb-termux-api' });
+  if (request.method === 'GET' && url.pathname === '/v1/devices') return json({ default_serial: defaultSerial, devices: await devices(), transport: 'adb-termux-api' });
   if (request.method === 'GET' && url.pathname === '/v1/inbound') return json({ messages: inbound, retention: 'memory-only, maximum 100 messages' });
   if (request.method === 'POST' && url.pathname === '/v1/verifications') {
-    const body = await request.json().catch(() => null) as { to?: unknown } | null;
+    const body = await request.json().catch(() => null) as { to?: unknown; device_serial?: unknown } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
+    const selected = await selectDevice(body?.device_serial);
+    if (!selected.serial) return json({ error: selected.error }, selected.status);
     if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
     const code = String(Math.floor(100000 + Math.random() * 900000)); const id = randomUUID();
-    const verification: Verification = { id, to: body.to, hash: hash(code), expiresAt: Date.now() + 300_000, status: 'accepted_by_android', attempts: 0 };
-    try { await sendWithAndroid(body.to, `Your verification code: ${code}`); verifications.set(id, verification); return json({ id, status: verification.status, expiresAt: new Date(verification.expiresAt).toISOString() }, 201); }
+    const verification: Verification = { id, to: body.to, deviceSerial: selected.serial, hash: hash(code), expiresAt: Date.now() + 300_000, status: 'accepted_by_android', attempts: 0 };
+    try { await sendWithAndroid(selected.serial, body.to, `Your verification code: ${code}`); verifications.set(id, verification); return json({ id, device_serial: verification.deviceSerial, status: verification.status, expiresAt: new Date(verification.expiresAt).toISOString() }, 201); }
     catch (error) { return json({ error: error instanceof Error ? error.message : 'send_failed' }, 503); }
   }
   if (request.method === 'POST' && url.pathname === '/v1/messages') {
-    const body = await request.json().catch(() => null) as { to?: unknown; body?: unknown } | null;
+    const body = await request.json().catch(() => null) as { to?: unknown; body?: unknown; device_serial?: unknown } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
     if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
     }
+    const selected = await selectDevice(body?.device_serial);
+    if (!selected.serial) return json({ error: selected.error }, selected.status);
     if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
-    const message: OutboundMessage = { id: randomUUID(), to: body.to, status: 'accepted_by_android' };
+    const message: OutboundMessage = { id: randomUUID(), to: body.to, deviceSerial: selected.serial, status: 'accepted_by_android' };
     try {
-      await sendWithAndroid(body.to, body.body.trim());
-      return json({ id: message.id, status: message.status }, 202);
+      await sendWithAndroid(selected.serial, body.to, body.body.trim());
+      return json({ id: message.id, device_serial: message.deviceSerial, status: message.status }, 202);
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : 'send_failed' }, 503);
     }

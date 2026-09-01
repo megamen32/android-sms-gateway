@@ -9,6 +9,7 @@
 - Server-generated six-digit verification codes
 - Authenticated text delivery for trusted integrations (for example, an approved UserIO draft)
 - Android presence endpoint and accepted-by-Android status
+- Multiple ADB devices with an explicit per-send `device_serial` choice
 - Per-number and global rate limits
 - Optional inbound SMS relay with a separate device token
 - No telephone numbers, API keys, or delivery claims stored in the repository
