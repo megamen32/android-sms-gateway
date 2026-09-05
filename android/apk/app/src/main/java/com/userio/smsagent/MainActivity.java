@@ -24,6 +24,7 @@ public class MainActivity extends Activity {
 
     private EditText urlField;
     private EditText tokenField;
+    private EditText phoneField;
     private TextView statusView;
     private TextView deviceIdView;
 
@@ -62,6 +63,13 @@ public class MainActivity extends Activity {
         tokenField.setText(prefs.getString("token", ""));
         root.addView(tokenField);
 
+        root.addView(label("Номер SIM этого телефона (необязательно)"));
+        phoneField = new EditText(this);
+        phoneField.setHint("+79XXXXXXXXX");
+        phoneField.setText(prefs.getString("phone", ""));
+        phoneField.setSingleLine();
+        root.addView(phoneField);
+
         deviceIdView = new TextView(this);
         deviceIdView.setPadding(0, pad, 0, 0);
         root.addView(deviceView());
@@ -78,6 +86,7 @@ public class MainActivity extends Activity {
             AgentService.prefs(this).edit()
                     .putString("url", url)
                     .putString("token", token)
+                    .putString("phone", phoneField.getText().toString().trim())
                     .apply();
             startService(false);
             toast("Сохранено, агент запущен");
@@ -120,10 +129,15 @@ public class MainActivity extends Activity {
         return deviceIdView;
     }
 
-    /** adb-friendly setup: am start ... --es server_url ... --es token ... */
+    /** adb-friendly setup: am start ... --es server_url ... --es token ... [--es phone_number ...] */
     private void applyIntentExtras(SharedPreferences prefs) {
         String url = getIntent().getStringExtra("server_url");
         String token = getIntent().getStringExtra("token");
+        String phone = getIntent().getStringExtra("phone_number");
+        if (phone != null && !phone.trim().isEmpty()) {
+            prefs.edit().putString("phone", phone.trim()).apply();
+            phoneField.setText(phone.trim());
+        }
         if (url != null && !url.trim().isEmpty() && token != null && !token.trim().isEmpty()) {
             prefs.edit()
                     .putString("url", url.trim().replaceAll("/+$", ""))

@@ -123,6 +123,7 @@ public class AgentService extends Service {
                     new JSONObject()
                             .put("device_id", deviceId())
                             .put("model", Build.MODEL)
+                            .put("phone", prefs(this).getString("phone", ""))
                             .toString());
             if (hello.status == 200) {
                 long serverPoll = new JSONObject(hello.body).optLong("poll_ms", DEFAULT_POLL_MS);

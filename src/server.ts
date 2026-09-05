@@ -12,7 +12,7 @@ type OutboundMessage = { id: string; to: string; deviceSerial: string; status: '
 type Device = { serial: string; state: string; model?: string };
 // APK agent leg: phones poll for tasks instead of being driven over ADB.
 type AgentTask = { id: string; type: 'send_sms' | 'ping'; to?: string; body?: string; createdAt: number };
-type AgentDevice = { id: string; model?: string; lastSeen: number; tasksDone: number; tasksFailed: number; lastError?: string };
+type AgentDevice = { id: string; model?: string; phone?: string; lastSeen: number; tasksDone: number; tasksFailed: number; lastError?: string };
 type AgentResult = { taskId: string; deviceId: string; status: string; error?: string; at: number };
 const verifications = new Map<string, Verification>();
 const inbound: Inbound[] = [];
@@ -58,6 +58,26 @@ function allow(to: string) {
   sends.push(now); perPhone.push(now); phoneSends.set(to, perPhone); return true;
 }
 
+// Register (or refresh) the phone agent as a UserIO account so the dashboard
+// shows the device — model and SIM number when provided — under SMS.
+async function registerAgentAccount(device: AgentDevice) {
+  if (!process.env.UNIVERSAL_USERIO_URL || !process.env.USERIO_API_TOKEN) return;
+  const displayName = `SMS ${device.model || 'Android'}${device.phone ? ` · ${device.phone}` : ''}`;
+  const payload = {
+    id: `sms:${device.id}`, provider: 'sms', display_name: displayName,
+    can_read: true, can_reply: true, credential_ref: `sms-agent:${device.id}`, enabled: true,
+  };
+  try {
+    await fetch(new URL('/v1/accounts', process.env.UNIVERSAL_USERIO_URL), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.error('agent account registration failed:', error instanceof Error ? error.message : error);
+  }
+}
+
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
   const url = new URL(request.url);
   if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline(defaultSerial), agents: agentDevices.size });
@@ -65,13 +85,15 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
   if (url.pathname.startsWith('/agent/')) {
     if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
     if (request.method === 'POST' && url.pathname === '/agent/hello') {
-      const body = await request.json().catch(() => null) as { device_id?: unknown; model?: unknown } | null;
+      const body = await request.json().catch(() => null) as { device_id?: unknown; model?: unknown; phone?: unknown } | null;
       const deviceId = typeof body?.device_id === 'string' ? body.device_id.trim().slice(0, 128) : '';
       if (!deviceId) return json({ error: 'device_id required' }, 400);
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
       device.model = typeof body?.model === 'string' ? body.model.slice(0, 128) : device.model;
+      device.phone = typeof body?.phone === 'string' ? body.phone.trim().slice(0, 24) : device.phone;
       device.lastSeen = Date.now();
       agentDevices.set(deviceId, device);
+      await registerAgentAccount(device);
       return json({ ok: true, poll_ms: agentPollMs });
     }
     if (request.method === 'GET' && url.pathname === '/agent/tasks') {
@@ -153,9 +175,11 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
     }
     const serial = typeof body?.device_serial === 'string' && body.device_serial.trim() ? body.device_serial.trim() : defaultSerial;
-    // Prefer the ADB path when that phone is attached; otherwise queue the
-    // task for the APK agent to pull on its next poll.
-    const online = await deviceOnline(serial);
+    // Prefer a live APK agent (fresh lastSeen) over the ADB/Termux path; the
+    // agent needs no cable and no open Termux window. Fall back to ADB only
+    // when no phone agent has checked in recently.
+    const agentAlive = [...agentDevices.values()].some((device) => Date.now() - device.lastSeen < 60_000);
+    const online = agentAlive ? false : await deviceOnline(serial);
     if (!online) {
       if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
       const id = randomUUID();
