@@ -52,6 +52,11 @@ task for the agent instead of typing into Termux (`status: "queued_for_device"`)
 Operator surface: `GET /v1/agent` lists phones, queue and recent results;
 `POST /v1/agent/ping` queues a no-op task to verify a phone end-to-end.
 
+To let phones work from anywhere (not just LAN), expose `/agent/*` on an
+HTTPS domain via the reverse-proxy snippet in
+[`deploy/nginx-sms-agent.conf`](deploy/nginx-sms-agent.conf) and point the app
+at `https://<domain>/sms-gateway`; keep the gateway bound to `127.0.0.1`.
+
 ## Learn more
 
 - [API](docs/API.md)
