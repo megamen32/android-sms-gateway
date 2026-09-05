@@ -10,8 +10,16 @@ type Verification = { id: string; to: string; deviceSerial: string; hash: string
 type Inbound = { id: string; from: string; body: string; receivedAt: string };
 type OutboundMessage = { id: string; to: string; deviceSerial: string; status: 'accepted_by_android' };
 type Device = { serial: string; state: string; model?: string };
+// APK agent leg: phones poll for tasks instead of being driven over ADB.
+type AgentTask = { id: string; type: 'send_sms' | 'ping'; to?: string; body?: string; createdAt: number };
+type AgentDevice = { id: string; model?: string; lastSeen: number; tasksDone: number; tasksFailed: number; lastError?: string };
+type AgentResult = { taskId: string; deviceId: string; status: string; error?: string; at: number };
 const verifications = new Map<string, Verification>();
 const inbound: Inbound[] = [];
+const agentQueue: AgentTask[] = [];
+const agentDevices = new Map<string, AgentDevice>();
+const agentResults: AgentResult[] = [];
+const agentPollMs = Number(process.env.AGENT_POLL_MS || 15) * 1000;
 const sends: number[] = []; const phoneSends = new Map<string, number[]>();
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -52,7 +60,60 @@ function allow(to: string) {
 
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
   const url = new URL(request.url);
-  if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline(defaultSerial) });
+  if (url.pathname === '/health') return json({ ok: true, android: await deviceOnline(defaultSerial), agents: agentDevices.size });
+  // --- APK agent surface (device-token auth) -------------------------------
+  if (url.pathname.startsWith('/agent/')) {
+    if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
+    if (request.method === 'POST' && url.pathname === '/agent/hello') {
+      const body = await request.json().catch(() => null) as { device_id?: unknown; model?: unknown } | null;
+      const deviceId = typeof body?.device_id === 'string' ? body.device_id.trim().slice(0, 128) : '';
+      if (!deviceId) return json({ error: 'device_id required' }, 400);
+      const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
+      device.model = typeof body?.model === 'string' ? body.model.slice(0, 128) : device.model;
+      device.lastSeen = Date.now();
+      agentDevices.set(deviceId, device);
+      return json({ ok: true, poll_ms: agentPollMs });
+    }
+    if (request.method === 'GET' && url.pathname === '/agent/tasks') {
+      const deviceId = url.searchParams.get('device_id')?.trim().slice(0, 128) || '';
+      if (!deviceId) return json({ error: 'device_id required' }, 400);
+      const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
+      device.lastSeen = Date.now(); agentDevices.set(deviceId, device);
+      const now = Date.now();
+      while (agentQueue.length && now - agentQueue[0].createdAt > 10 * 60_000) agentQueue.shift(); // drop stale
+      const tasks = agentQueue.splice(0, 10);
+      return json({ tasks: tasks.map(({ id, type, to, body }) => ({ id, type, to, body })) });
+    }
+    if (request.method === 'POST' && url.pathname === '/agent/results') {
+      const body = await request.json().catch(() => null) as { task_id?: unknown; device_id?: unknown; status?: unknown; error?: unknown } | null;
+      const taskId = typeof body?.task_id === 'string' ? body.task_id : '';
+      const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
+      if (!taskId || !deviceId || typeof body?.status !== 'string') return json({ error: 'task_id, device_id and status required' }, 400);
+      const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: Date.now() };
+      device.lastSeen = Date.now();
+      if (body.status === 'sent' || body.status === 'ok') device.tasksDone += 1;
+      else { device.tasksFailed += 1; device.lastError = String(body.error || body.status).slice(0, 200); }
+      agentDevices.set(deviceId, device);
+      agentResults.unshift({ taskId, deviceId, status: body.status, error: typeof body.error === 'string' ? body.error.slice(0, 200) : undefined, at: Date.now() });
+      agentResults.splice(50);
+      return json({ ok: true });
+    }
+    if (request.method === 'POST' && url.pathname === '/agent/inbound') {
+      const body = await request.json().catch(() => null) as { device_id?: unknown; from?: unknown; body?: unknown; received_at?: unknown } | null;
+      const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
+      if (!deviceId || !validPhone(body?.from) || typeof body?.body !== 'string' || !body.body.trim()) {
+        return json({ error: 'device_id, from (E.164) and body required' }, 400);
+      }
+      const receivedMs = typeof body?.received_at === 'number' ? body.received_at : typeof body?.received_at === 'string' ? Date.parse(body.received_at) : Date.now();
+      const id = hash(`${body.from}:${receivedMs}:${body.body}`);
+      if (!inbound.some((stored) => stored.id === id)) {
+        inbound.unshift({ id, from: body.from, body: body.body.slice(0, 1600), receivedAt: new Date(Number.isFinite(receivedMs) ? receivedMs : Date.now()).toISOString() });
+        inbound.splice(100);
+      }
+      return json({ accepted: true });
+    }
+    return json({ error: 'not_found' }, 404);
+  }
   if (request.method === 'POST' && url.pathname === '/v1/device/inbound') {
     if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
     const body = await request.json().catch(() => null) as { messages?: unknown } | null;
@@ -91,6 +152,16 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
     }
+    const serial = typeof body?.device_serial === 'string' && body.device_serial.trim() ? body.device_serial.trim() : defaultSerial;
+    // Prefer the ADB path when that phone is attached; otherwise queue the
+    // task for the APK agent to pull on its next poll.
+    const online = await deviceOnline(serial);
+    if (!online) {
+      if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
+      const id = randomUUID();
+      agentQueue.push({ id, type: 'send_sms', to: body.to, body: body.body.trim(), createdAt: Date.now() });
+      return json({ id, status: 'queued_for_device' }, 202);
+    }
     const selected = await selectDevice(body?.device_serial);
     if (!selected.serial) return json({ error: selected.error }, selected.status);
     if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
@@ -101,6 +172,19 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : 'send_failed' }, 503);
     }
+  }
+  if (request.method === 'GET' && url.pathname === '/v1/agent') {
+    return json({
+      devices: [...agentDevices.values()],
+      queue: agentQueue.map(({ id, type, to, createdAt }) => ({ id, type, to, createdAt })),
+      results: agentResults.slice(0, 20),
+    });
+  }
+  // Queue a no-op task to verify a phone agent's poll-execute-report loop.
+  if (request.method === 'POST' && url.pathname === '/v1/agent/ping') {
+    const id = randomUUID();
+    agentQueue.push({ id, type: 'ping', createdAt: Date.now() });
+    return json({ id, queued: agentQueue.length }, 202);
   }
   const match = url.pathname.match(/^\/v1\/verifications\/([\w-]+)\/check$/);
   if (request.method === 'POST' && match) {

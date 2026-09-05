@@ -34,6 +34,24 @@ The server listens on `127.0.0.1:8787` by default. Put it behind HTTPS and keep 
 
 For an always-on local service, install [`deploy/android-sms-gateway.service`](deploy/android-sms-gateway.service), copy [`deploy/android-sms-gateway.env.example`](deploy/android-sms-gateway.env.example) to `/etc/android-sms-gateway.env` with mode `0600`, then enable it with systemd. Keep `HOST=127.0.0.1`: UserIO can call it locally without publishing its bearer API.
 
+## APK agent (no ADB, no Termux)
+
+[`android/apk`](android/apk) is a tiny (~18 KB) installable Android agent. The
+phone polls the gateway over WiFi for tasks, sends SMS through `SmsManager`
+and relays every incoming SMS back — no USB cable, no Termux, survives reboot.
+
+1. Build the APK: `cd android/apk && gradle assembleDebug` (Android SDK 34, Gradle 8.9).
+2. Install it on the phone, open **SMS Agent**, enter the gateway URL and the
+   device token (`SMS_GATEWAY_DEVICE_TOKEN`), grant the SMS permissions and
+   disable battery optimization for reliable polling.
+3. The phone registers via `POST /agent/hello`, then long-cycles
+   `GET /agent/tasks` every `AGENT_POLL_MS` seconds.
+
+When the ADB phone is offline, `POST /v1/messages` automatically queues the
+task for the agent instead of typing into Termux (`status: "queued_for_device"`).
+Operator surface: `GET /v1/agent` lists phones, queue and recent results;
+`POST /v1/agent/ping` queues a no-op task to verify a phone end-to-end.
+
 ## Learn more
 
 - [API](docs/API.md)
