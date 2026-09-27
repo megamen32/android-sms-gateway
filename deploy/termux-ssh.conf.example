@@ -1,0 +1,11 @@
+[Service]
+# Install as android-sms-gateway.service.d/20-termux-ssh.conf after pinning this phone's SSH host key.
+Environment=SMS_SSH_HOST=127.0.0.1
+Environment=SMS_SSH_PORT=22220
+Environment=SMS_SSH_USER=roomhacker
+Environment=SMS_SSH_KEY=/home/roomhacker/.ssh/id_rsa
+Environment=SMS_SSH_KNOWN_HOSTS=/home/roomhacker/.ssh/known_hosts
+Environment=SMS_SSH_HELPER=/data/data/com.termux/files/home/.local/bin/sms-gateway-task
+Environment=SMS_SSH_EXPECTED_UID=10327
+Environment=SMS_SSH_EXPECTED_MODEL=SM-G998B
+Environment=SMS_QUEUE_PATH=/opt/android-sms-gateway/state/sms.sqlite
