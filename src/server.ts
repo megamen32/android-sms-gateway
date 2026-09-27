@@ -181,7 +181,9 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       expiresAt: new Date(verification.expiresAt).toISOString() }, 201);
   }
   if (request.method === 'POST' && url.pathname === '/v1/messages') {
-    const body = await request.json().catch(() => null) as { to?: unknown; body?: unknown; device_serial?: unknown } | null;
+    const body = await request.json().catch(() => null) as {
+      to?: unknown; body?: unknown; device_serial?: unknown; expires_at?: unknown;
+    } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
     if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
@@ -191,9 +193,16 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       if (serial !== defaultSerial) return json({ error: 'unknown_device_serial' }, 400);
       const key = request.headers.get('Idempotency-Key') || undefined;
       if (key && key.length > 200) return json({ error: 'invalid_idempotency_key' }, 400);
+      const expiresAt = body.expires_at === undefined ? undefined :
+        typeof body.expires_at === 'string' &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(body.expires_at)
+          ? Date.parse(body.expires_at) : NaN;
+      if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
+        return json({ error: 'message_expired_or_invalid_expiry' }, 400);
+      }
       // Rate-limit new work only; a retry must be able to recover the original receipt.
       try {
-        const task = durableQueue.enqueue(body.to, body.body.trim(), key, () => allow(body.to as string));
+        const task = durableQueue.enqueue(body.to, body.body.trim(), key, () => allow(body.to as string), expiresAt);
         return json({ id: task.id, status: task.status, device_serial: serial,
           status_url: `/v1/messages/${task.id}` }, 202);
       } catch (error) {

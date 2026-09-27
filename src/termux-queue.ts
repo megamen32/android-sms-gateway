@@ -23,7 +23,8 @@ export class SmsQueue {
         status TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
       UPDATE sms_tasks SET status='unknown' WHERE status='sending';`);
   }
-  enqueue(to: string, body: string, key?: string, allowNew: () => boolean = () => true): Task {
+  enqueue(to: string, body: string, key?: string, allowNew: () => boolean = () => true,
+    expiresAt?: number): Task {
     const now = Date.now();
     // Exact retries without a key are deduplicated while the original is retained.
     const dedupe = createHash('sha256').update(key ? `key:${key}` : `body:${to}:${body}`).digest('hex');
@@ -33,7 +34,8 @@ export class SmsQueue {
       return old;
     }
     if (!allowNew()) throw new Error('rate_limited');
-    const task = { id: randomUUID(), recipient: to, body, status: 'queued_for_device', created: now, expires: now + 600_000 };
+    const task = { id: randomUUID(), recipient: to, body, status: 'queued_for_device', created: now,
+      expires: Math.min(expiresAt ?? now + 600_000, now + 600_000) };
     this.db.query('INSERT INTO sms_tasks VALUES (?,?,?,?,?,?,?)').run(
       task.id, dedupe, to, body, task.status, now, task.expires,
     );
@@ -53,6 +55,10 @@ export class SmsQueue {
       this.db.query("UPDATE sms_tasks SET status='expired' WHERE status='queued_for_device' AND expires<?").run(Date.now());
       const task = this.db.query("SELECT * FROM sms_tasks WHERE status='queued_for_device' ORDER BY created LIMIT 1").get() as Task | null;
       if (!task || !await this.transport.ready()) return;
+      if (task.expires <= Date.now()) {
+        this.db.query("UPDATE sms_tasks SET status='expired' WHERE id=?").run(task.id);
+        return;
+      }
       // Commit the dispatch lease before crossing the network: never repeat after uncertainty.
       this.db.query("UPDATE sms_tasks SET status='sending' WHERE id=? AND status='queued_for_device'").run(task.id);
       let status = 'unknown';

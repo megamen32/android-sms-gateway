@@ -45,10 +45,12 @@ Verify the physical serial when establishing that SSH trust; do not trust a mode
 `GET /v1/device` must report `online: true` before the first send. No foreground Termux window or ADB input is used.
 
 `POST /v1/messages` returns a persistent queue ID, never a delivery claim. Supply a unique `Idempotency-Key`
-per intended message and reuse it on HTTP retries. Without a key, identical recipient/body pairs remain
+per intended message and reuse it on HTTP retries. Optional `expires_at` (RFC3339 UTC with `Z` or `+00:00`)
+bounds dispatch by the upstream OTP challenge deadline; the default/max queue lifetime is ten minutes.
+Without a key, identical recipient/body pairs remain
 deduplicated; use a new explicit key for an intentional repeat. Poll `GET /v1/messages/{id}`:
 
-- `queued_for_device`: waiting for the configured phone; expires after ten minutes.
+- `queued_for_device`: waiting for the configured phone; expires within ten minutes or the supplied deadline.
 - `sending`: a durable dispatch lease was acquired.
 - `sent`: exact recipient/body was found in the Android sent-store with a fresh timestamp.
 - `unknown`: dispatch was ambiguous, including a gateway crash after leasing. **Never automatically retry.**

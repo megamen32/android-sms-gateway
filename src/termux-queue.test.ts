@@ -60,6 +60,27 @@ test('only new work consumes rate budget and exact payload retries deduplicate',
   expect(() => queue.enqueue('+15550000001', 'other', undefined, allow)).toThrow('rate_limited'); queue.close();
 });
 
+test('upstream challenge expiry bounds queued dispatch', () => {
+  const queue = new SmsQueue(path(), { ready: async () => false, send: async () => false });
+  const deadline = Date.now() + 20_000;
+  expect(queue.enqueue('+15550000001', 'sandbox', 'expiry', () => true, deadline).expires).toBe(deadline);
+  const capped = queue.enqueue('+15550000001', 'sandbox2', 'cap', () => true, Date.now() + 900_000);
+  expect(capped.expires - capped.created).toBe(600_000); queue.close();
+});
+
+test('OTP expiring during phone preflight is discarded before the dispatch lease', async () => {
+  const realNow = Date.now; const initial = realNow(); let now = initial; let sends = 0;
+  Date.now = () => now;
+  try {
+    const queue = new SmsQueue(path(), {
+      ready: async () => { now = initial + 30_000; return true; },
+      send: async () => { sends++; return true; },
+    });
+    const task = queue.enqueue('+15550000001', 'sandbox', 'slow-probe', () => true, initial + 20_000);
+    await queue.tick(); expect(queue.get(task.id)?.status).toBe('expired'); expect(sends).toBe(0); queue.close();
+  } finally { Date.now = realNow; }
+});
+
 test('sent store receipt requires exact recipient, body and fresh timestamp', () => {
   const task = { id: 'test', recipient: '+15550000001', body: 'sandbox', status: 'sending', created: Date.now(), expires: Date.now() + 1000 };
   const row = { address: task.recipient, body: task.body, date: task.created, type: 2 };
