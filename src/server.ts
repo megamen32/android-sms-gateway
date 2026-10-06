@@ -1,5 +1,6 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { SmsQueue, SshTermuxTransport } from './termux-queue';
+import { gatewayHealth } from './health';
 
 const port = Number(process.env.PORT || 8787);
 const apiKey = process.env.SMS_GATEWAY_API_KEY;
@@ -87,7 +88,14 @@ async function registerAgentAccount(device: AgentDevice) {
 
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
   const url = new URL(request.url);
-  if (url.pathname === '/health') return json({ ok: true, android: termux ? await termux.ready() : await deviceOnline(defaultSerial), agents: agentDevices.size });
+  if (url.pathname === '/health') {
+    const android = termux ? await termux.ready() : await deviceOnline(defaultSerial);
+    const activeAgents = [...agentDevices.values()].filter(
+      (device) => Date.now() - device.lastSeen <= Math.max(60_000, agentPollMs * 3),
+    ).length;
+    const health = gatewayHealth(android, activeAgents);
+    return json(health.body, health.status);
+  }
   // --- APK agent surface (device-token auth) -------------------------------
   if (url.pathname.startsWith('/agent/')) {
     if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);

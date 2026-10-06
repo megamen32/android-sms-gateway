@@ -43,6 +43,9 @@ for sent-store queries. Configure the SSH host, pinned known-hosts file, private
 UID and model using `deploy/termux-ssh.conf.example` as a systemd drop-in for the existing gateway service.
 Verify the physical serial when establishing that SSH trust; do not trust a model name alone.
 `GET /v1/device` must report `online: true` before the first send. No foreground Termux window or ADB input is used.
+`GET /health` returns HTTP 503 with `ok: false` while neither the pinned SSH
+phone nor a recently polling APK agent is reachable. A running process alone
+is not reported as healthy SMS delivery.
 
 `POST /v1/messages` returns a persistent queue ID, never a delivery claim. Supply a unique `Idempotency-Key`
 per intended message and reuse it on HTTP retries. Optional `expires_at` (RFC3339 UTC with `Z` or `+00:00`)
