@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
         refreshStatus();
     }
 
-    private LinearLayout buildUi() {
+    private android.view.View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
@@ -115,7 +115,10 @@ public class MainActivity extends Activity {
         statusView.setPadding(0, pad, 0, 0);
         statusView.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(statusView);
-        return root;
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(root);
+        return scroll;
     }
 
     private TextView label(String text) {
