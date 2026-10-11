@@ -35,3 +35,26 @@ Source publish then install helper/runtime, actual authenticated all20read,
 bounded paging/no-duplicates, incrementalempty/readflags and accepted47dda
 receipt mapping are the remaining integration checks. Root imports under native
 account and owns UserIO exact identity hydration; incoming push is not replayed.
+
+DELIVERED09fbbb5: scoped sourcepush preceded phonehelper/runtime installation.
+Phonehelper exactly matched previouspublishedscript before atomic upgrade;
+senderlogic preserved. Only android-sms-gateway restarted after proving no
+queued/sendingtasks. Actual authenticated /v1/history firstpage200 took9.6s,
+returnedall20nativeSMS15incoming/5outgoing, snapshot20/next20/has_morefalse;
+providerID/body/address/read vectors exactly matcheddirectphone20rowbaseline.
+Unique fullsnapshot mappings persisted: provider8→64b2b368 receipt,
+provider10→e43a9a52 receipt, provider20→47dda0c0 acceptedownerreceipt. Existing
+message identities are hydrated; repeated realtext is never deduplicated.
+
+Consumer paging24.5s: pages7/7/6, cursors0→7→14→20, all20IDs exactlyonce;
+nextincremental after20 returned0rows/new snapshot20. Directphysicalprovider
+read after APIproof still20rows/15inbox/5sent, readflagsunchanged. Existingqueue
+remains3sent/1expired and no pending/sendingtasks: no newSMS/call or oldreplay.
+Service21.1MiB/6tasks/NRestarts0, high/max/OOMevents0. Lease084bf70… released,
+statusfree. Protectedproofs: .tmp/native-history/gateway-full.json,
+paging-proof.json, provider-first-page.json; no rawsensitivepublicoutputs.
+
+Root received READY API/schema/proof, including required35sclienttimeout
+(generic8s is insufficient for coldfirstpage), exactreceipt20 mapping and
+GSM2SIP archive capability/count. UserIOimport/UI/accountprojection remains
+parent-owned; that final usersurface claim is not made by this gateway line.
