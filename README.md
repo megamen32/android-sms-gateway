@@ -82,6 +82,33 @@ task for the agent instead of typing into Termux (`status: "queued_for_device"`)
 Operator surface: `GET /v1/agent` lists phones, queue and recent results;
 `POST /v1/agent/ping` queues a no-op task to verify a phone end-to-end.
 
+APK version 1.1 has an addressed persistent queue: pass `device_id` from the
+registered `sms:<device_id>` account to `POST /v1/messages` or
+`POST /v1/agent/ping`. Another phone cannot consume that task. Polling commits
+the dispatch lease before returning work; interrupted dispatch becomes `unknown`
+after a gateway restart and is never automatically repeated. `sent` now requires
+Android's SMS sent callback, while carrier/recipient delivery remains unconfirmed.
+APK inbound messages are selected with `GET /v1/inbound?device_id=<id>`;
+when SSH is configured, the unfiltered endpoint preserves the native phone's inbox.
+The S21 keeps its pinned SSH Termux:API route and existing GSM2SIP voice route.
+
+The same public `/agent/` route exposes `GET /agent/download` without a bearer
+token, returning only the APK. Set `SMS_AGENT_APK_PATH` to the built APK path
+when deployment keeps build output elsewhere. The configuration screen requires
+the gateway URL and device token; never include the token in the download URL.
+`POST /agent/hello` returns `account_registered:false` when UserIO registration
+fails, and the phone re-registers every minute after connectivity returns.
+
+The runtime budget is 128/256 MiB soft/hard RAM, no swap, one CPU, 64 tasks and
+IOWeight 10. Before this change the service used 9.3 MiB and 12 tasks on
+server-100; the budget includes concurrent bounded SSH preflights. The APK build
+uses one Gradle worker, a 768 MiB JVM, two Java CPUs, no retained daemon, and a
+180-second deadline. Version 1.1 built in about one minute with 44 GiB available
+host RAM and 240 GiB disk free. Focused unit/API checks take two seconds, deadline
+20 seconds, and exercise per-phone routing, crash/no-replay, expiry and native
+receipt compatibility. Physical APK registration/ping is a separate integration
+check (expected 30 seconds, maximum 90), with no SMS or cellular call.
+
 To let phones work from anywhere (not just LAN), expose `/agent/*` on an
 HTTPS domain via the reverse-proxy snippet in
 [`deploy/nginx-sms-agent.conf`](deploy/nginx-sms-agent.conf) and point the app

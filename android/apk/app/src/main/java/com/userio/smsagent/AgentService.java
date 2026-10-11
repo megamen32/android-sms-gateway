@@ -4,6 +4,8 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.app.PendingIntent;
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -37,6 +39,7 @@ public class AgentService extends Service {
     private String lastInboundKey = "";
     private long pollMs = DEFAULT_POLL_MS;
     private String lastStatus = "starting";
+    private long lastHello = 0;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -67,7 +70,8 @@ public class AgentService extends Service {
         smsReceiver = new InboundRelay();
         IntentFilter filter = new IntentFilter("android.provider.Telephony.SMS_RECEIVED");
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(smsReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            // Telephony broadcasts originate from a privileged non-system UID.
+            registerReceiver(smsReceiver, filter, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(smsReceiver, filter);
         }
@@ -126,9 +130,12 @@ public class AgentService extends Service {
                             .put("phone", prefs(this).getString("phone", ""))
                             .toString());
             if (hello.status == 200) {
-                long serverPoll = new JSONObject(hello.body).optLong("poll_ms", DEFAULT_POLL_MS);
+                JSONObject reply = new JSONObject(hello.body);
+                long serverPoll = reply.optLong("poll_ms", DEFAULT_POLL_MS);
                 if (serverPoll >= 3000) pollMs = serverPoll;
-                updateStatus("подключён, опрос каждые " + (pollMs / 1000) + " с");
+                lastHello = System.currentTimeMillis();
+                updateStatus(reply.optBoolean("account_registered", false)
+                        ? "подключён к UserIO" : "телефон подключён; регистрация аккаунта ожидается");
             } else {
                 updateStatus("hello отклонён: HTTP " + hello.status);
             }
@@ -146,6 +153,13 @@ public class AgentService extends Service {
             worker.postDelayed(this::pollOnce, 30_000);
             return;
         }
+        if (System.currentTimeMillis() - lastHello > 60_000) {
+            // Re-register after connectivity recovery or a gateway restart.
+            lastHello = System.currentTimeMillis();
+            worker.post(this::helloThenLoop);
+            return;
+        }
+        flushResults();
         try {
             Http.Response response = Http.request(
                     "GET", base + "/agent/tasks?device_id=" + deviceId(), token, null);
@@ -181,8 +195,7 @@ public class AgentService extends Service {
             if ("ping".equals(type)) {
                 report(id, "ok", null);
             } else if ("send_sms".equals(type)) {
-                sendSms(task.optString("to", ""), task.optString("body", ""));
-                report(id, "sent", null);
+                sendSms(id, task.optString("to", ""), task.optString("body", ""));
             } else {
                 report(id, "failed", "unknown task type: " + type);
             }
@@ -192,16 +205,35 @@ public class AgentService extends Service {
     }
 
     @SuppressWarnings("deprecation")
-    private void sendSms(String to, String body) throws Exception {
+    private void sendSms(String taskId, String to, String body) throws Exception {
         if (to.isEmpty() || body.isEmpty()) throw new Exception("to and body are required");
         SmsManager manager = Build.VERSION.SDK_INT >= 31
                 ? getSystemService(SmsManager.class)
                 : SmsManager.getDefault();
         java.util.ArrayList<String> parts = manager.divideMessage(body);
+        String action = getPackageName() + ".SMS_SENT." + taskId;
+        java.util.concurrent.atomic.AtomicInteger remaining = new java.util.concurrent.atomic.AtomicInteger(parts.size());
+        java.util.concurrent.atomic.AtomicBoolean failed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        BroadcastReceiver sent = new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                if (getResultCode() != Activity.RESULT_OK && failed.compareAndSet(false, true)) {
+                    report(taskId, "failed", "android_sms_result_" + getResultCode());
+                }
+                if (remaining.decrementAndGet() == 0) {
+                    unregisterReceiver(this);
+                    if (!failed.get()) report(taskId, "sent", null);
+                }
+            }
+        };
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(sent, new IntentFilter(action), Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(sent, new IntentFilter(action));
+        java.util.ArrayList<PendingIntent> callbacks = new java.util.ArrayList<>();
+        for (int index = 0; index < parts.size(); index++) callbacks.add(PendingIntent.getBroadcast(this, index,
+                new Intent(action).setPackage(getPackageName()), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
         if (parts.size() == 1) {
-            manager.sendTextMessage(to, null, body, null, null);
+            manager.sendTextMessage(to, null, body, callbacks.get(0), null);
         } else {
-            manager.sendMultipartTextMessage(to, null, parts, null, null);
+            manager.sendMultipartTextMessage(to, null, parts, callbacks, null);
         }
     }
 
@@ -212,10 +244,22 @@ public class AgentService extends Service {
                     .put("device_id", deviceId())
                     .put("status", status);
             if (error != null) payload.put("error", error);
-            Http.request("POST", prefs(this).getString("url", "") + "/agent/results",
-                    prefs(this).getString("token", ""), payload.toString());
+            // Store only the receipt, never a number/body. Retry reporting, never sending.
+            prefs(this).edit().putString("result:" + taskId, payload.toString()).commit();
+            worker.post(this::flushResults);
         } catch (Exception ignored) {
-            // Result reporting is best-effort; the next poll keeps the loop alive.
+            // A missing callback/report leaves the gateway lease unresolved, never replayed.
+        }
+    }
+
+    private void flushResults() {
+        for (java.util.Map.Entry<String, ?> item : prefs(this).getAll().entrySet()) {
+            if (!item.getKey().startsWith("result:")) continue;
+            try {
+                Http.Response response = Http.request("POST", prefs(this).getString("url", "") + "/agent/results",
+                        prefs(this).getString("token", ""), String.valueOf(item.getValue()));
+                if (response.status == 200) prefs(this).edit().remove(item.getKey()).apply();
+            } catch (Exception ignored) { }
         }
     }
 

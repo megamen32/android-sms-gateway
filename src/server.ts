@@ -1,6 +1,7 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { SmsQueue, SshTermuxTransport } from './termux-queue';
 import { gatewayHealth } from './health';
+import { AgentQueue } from './agent-queue';
 
 const port = Number(process.env.PORT || 8787);
 const apiKey = process.env.SMS_GATEWAY_API_KEY;
@@ -9,16 +10,16 @@ const defaultSerial = process.env.ANDROID_SERIAL;
 if (!apiKey || !deviceToken || !defaultSerial) throw new Error('SMS_GATEWAY_API_KEY, SMS_GATEWAY_DEVICE_TOKEN and ANDROID_SERIAL are required');
 
 type Verification = { id: string; to: string; deviceSerial: string; hash: string; expiresAt: number; status: 'queued_for_device' | 'verified'; attempts: number };
-type Inbound = { id: string; from: string; body: string; receivedAt: string };
+type Inbound = { id: string; from: string; body: string; receivedAt: string; device_id?: string };
 type Device = { serial: string; state: string; model?: string };
 // APK agent leg: phones poll for tasks instead of being driven over ADB.
-type AgentTask = { id: string; type: 'send_sms' | 'ping'; to?: string; body?: string; createdAt: number };
-type AgentDevice = { id: string; model?: string; phone?: string; lastSeen: number; tasksDone: number; tasksFailed: number; lastError?: string };
+type AgentDevice = { id: string; model?: string; phone?: string; lastSeen: number; tasksDone: number; tasksFailed: number; lastError?: string; registered?: boolean };
 type AgentResult = { taskId: string; deviceId: string; status: string; error?: string; at: number };
 const verifications = new Map<string, Verification>();
 const inbound: Inbound[] = [];
-const agentQueue: AgentTask[] = [];
+const agentQueue = new AgentQueue(process.env.SMS_AGENT_QUEUE_PATH || './state/agents.sqlite');
 const agentDevices = new Map<string, AgentDevice>();
+for (const device of agentQueue.devices() as AgentDevice[]) agentDevices.set(device.id, device);
 const agentResults: AgentResult[] = [];
 const agentPollMs = Number(process.env.AGENT_POLL_MS || 15) * 1000;
 const sends: number[] = []; const phoneSends = new Map<string, number[]>();
@@ -69,19 +70,23 @@ function allow(to: string) {
 // Register (or refresh) the phone agent as a UserIO account so the dashboard
 // shows the device — model and SIM number when provided — under SMS.
 async function registerAgentAccount(device: AgentDevice) {
-  if (!process.env.UNIVERSAL_USERIO_URL || !process.env.USERIO_API_TOKEN) return;
+  if (!process.env.UNIVERSAL_USERIO_URL || !process.env.USERIO_API_TOKEN) { device.registered = false; return; }
   const displayName = `SMS ${device.model || 'Android'}${device.phone ? ` · ${device.phone}` : ''}`;
   const payload = {
     id: `sms:${device.id}`, provider: 'sms', display_name: displayName,
     can_read: true, can_reply: true, credential_ref: `sms-agent:${device.id}`, enabled: true,
   };
   try {
-    await fetch(new URL('/v1/accounts', process.env.UNIVERSAL_USERIO_URL), {
+    const response = await fetch(new URL('/v1/accounts', process.env.UNIVERSAL_USERIO_URL), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
     });
+    device.registered = response.ok;
+    if (!response.ok) device.lastError = `account_registration_http_${response.status}`;
   } catch (error) {
+    device.registered = false;
     console.error('agent account registration failed:', error instanceof Error ? error.message : error);
   }
 }
@@ -97,6 +102,15 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     return json(health.body, health.status);
   }
   // --- APK agent surface (device-token auth) -------------------------------
+  if (['GET', 'HEAD'].includes(request.method) && url.pathname === '/agent/download') {
+    const file = Bun.file(process.env.SMS_AGENT_APK_PATH || './android/apk/app/build/outputs/apk/debug/app-debug.apk');
+    if (!await file.exists()) return json({ error: 'apk_unavailable' }, 503);
+    return new Response(request.method === 'HEAD' ? null : file, { headers: {
+      'Content-Type': 'application/vnd.android.package-archive',
+      'Content-Disposition': 'attachment; filename="userio-sms-agent.apk"',
+      'Cache-Control': 'no-cache',
+    } });
+  }
   if (url.pathname.startsWith('/agent/')) {
     if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
     if (request.method === 'POST' && url.pathname === '/agent/hello') {
@@ -109,16 +123,16 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       device.lastSeen = Date.now();
       agentDevices.set(deviceId, device);
       await registerAgentAccount(device);
-      return json({ ok: true, poll_ms: agentPollMs });
+      agentQueue.rememberDevice(device);
+      return json({ ok: true, poll_ms: agentPollMs, account_registered: device.registered });
     }
     if (request.method === 'GET' && url.pathname === '/agent/tasks') {
       const deviceId = url.searchParams.get('device_id')?.trim().slice(0, 128) || '';
       if (!deviceId) return json({ error: 'device_id required' }, 400);
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
       device.lastSeen = Date.now(); agentDevices.set(deviceId, device);
-      const now = Date.now();
-      while (agentQueue.length && now - agentQueue[0].createdAt > 10 * 60_000) agentQueue.shift(); // drop stale
-      const tasks = agentQueue.splice(0, 10);
+      agentQueue.rememberDevice(device);
+      const tasks = agentQueue.claim(deviceId);
       return json({ tasks: tasks.map(({ id, type, to, body }) => ({ id, type, to, body })) });
     }
     if (request.method === 'POST' && url.pathname === '/agent/results') {
@@ -126,11 +140,15 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       const taskId = typeof body?.task_id === 'string' ? body.task_id : '';
       const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
       if (!taskId || !deviceId || typeof body?.status !== 'string') return json({ error: 'task_id, device_id and status required' }, 400);
+      if (!agentQueue.finish(deviceId, taskId, body.status, typeof body.error === 'string' ? body.error : undefined)) {
+        return json({ error: 'unknown_task_or_result_conflict' }, 409);
+      }
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: Date.now() };
       device.lastSeen = Date.now();
       if (body.status === 'sent' || body.status === 'ok') device.tasksDone += 1;
       else { device.tasksFailed += 1; device.lastError = String(body.error || body.status).slice(0, 200); }
       agentDevices.set(deviceId, device);
+      agentQueue.rememberDevice(device);
       agentResults.unshift({ taskId, deviceId, status: body.status, error: typeof body.error === 'string' ? body.error.slice(0, 200) : undefined, at: Date.now() });
       agentResults.splice(50);
       return json({ ok: true });
@@ -142,9 +160,9 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
         return json({ error: 'device_id, from (E.164) and body required' }, 400);
       }
       const receivedMs = typeof body?.received_at === 'number' ? body.received_at : typeof body?.received_at === 'string' ? Date.parse(body.received_at) : Date.now();
-      const id = hash(`${body.from}:${receivedMs}:${body.body}`);
+      const id = hash(`${deviceId}:${body.from}:${receivedMs}:${body.body}`);
       if (!inbound.some((stored) => stored.id === id)) {
-        inbound.unshift({ id, from: body.from, body: body.body.slice(0, 1600), receivedAt: new Date(Number.isFinite(receivedMs) ? receivedMs : Date.now()).toISOString() });
+        inbound.unshift({ id, from: body.from, body: body.body.slice(0, 1600), device_id: deviceId, receivedAt: new Date(Number.isFinite(receivedMs) ? receivedMs : Date.now()).toISOString() });
         inbound.splice(100);
       }
       return json({ accepted: true });
@@ -172,7 +190,12 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
   if (request.method === 'GET' && url.pathname === '/v1/device') return json({ serial: defaultSerial,
     online: termux ? await termux.ready() : await deviceOnline(defaultSerial), transport: termux ? 'ssh-termux-api' : 'apk-agent' });
   if (request.method === 'GET' && url.pathname === '/v1/devices') return json({ default_serial: defaultSerial, devices: await devices(), transport: 'adb-termux-api' });
-  if (request.method === 'GET' && url.pathname === '/v1/inbound') return json({ messages: inbound, retention: 'memory-only, maximum 100 messages' });
+  if (request.method === 'GET' && url.pathname === '/v1/inbound') {
+    const deviceId = url.searchParams.get('device_id');
+    return json({ messages: deviceId ? inbound.filter(message => message.device_id === deviceId) :
+      termux ? inbound.filter(message => !message.device_id) : inbound,
+      retention: 'memory-only, maximum 100 messages' });
+  }
   if (request.method === 'POST' && url.pathname === '/v1/verifications') {
     const body = await request.json().catch(() => null) as { to?: unknown; device_serial?: unknown } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
@@ -190,13 +213,30 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
   }
   if (request.method === 'POST' && url.pathname === '/v1/messages') {
     const body = await request.json().catch(() => null) as {
-      to?: unknown; body?: unknown; device_serial?: unknown; expires_at?: unknown;
+      to?: unknown; body?: unknown; device_serial?: unknown; device_id?: unknown; expires_at?: unknown;
     } | null;
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
     if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
     }
     const serial = typeof body?.device_serial === 'string' && body.device_serial.trim() ? body.device_serial.trim() : defaultSerial;
+    const agentId = typeof body?.device_id === 'string' ? body.device_id.trim() :
+      serial.startsWith('sms-agent:') ? serial.slice('sms-agent:'.length) : '';
+    if (agentId) {
+      if (!agentDevices.has(agentId)) return json({ error: 'unknown_agent_device' }, 400);
+      const key = request.headers.get('Idempotency-Key') || undefined;
+      if (key && key.length > 200) return json({ error: 'invalid_idempotency_key' }, 400);
+      const expires = body.expires_at === undefined ? Date.now() + 600_000 :
+        typeof body.expires_at === 'string' && /(?:Z|\+00:00)$/.test(body.expires_at) ? Date.parse(body.expires_at) : NaN;
+      if (!Number.isFinite(expires) || expires <= Date.now()) return json({ error: 'message_expired_or_invalid_expiry' }, 400);
+      try {
+        const task = agentQueue.enqueue(agentId, 'send_sms', body.to, body.body.trim(), key, expires, () => allow(body.to as string));
+        return json({ id: task.id, status: task.status, device_id: agentId, status_url: `/v1/messages/${task.id}` }, 202);
+      } catch (error) {
+        const code = error instanceof Error ? error.message : 'queue_unavailable';
+        return json({ error: code }, code === 'rate_limited' ? 429 : code === 'idempotency_conflict' ? 409 : 503);
+      }
+    }
     if (durableQueue) {
       if (serial !== defaultSerial) return json({ error: 'unknown_device_serial' }, 400);
       const key = request.headers.get('Idempotency-Key') || undefined;
@@ -223,15 +263,19 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     const agentAlive = [...agentDevices.values()].some((device) => Date.now() - device.lastSeen < 60_000);
     if (agentAlive) {
       if (!allow(body.to)) return json({ error: 'rate_limited' }, 429);
-      const id = randomUUID();
-      agentQueue.push({ id, type: 'send_sms', to: body.to, body: body.body.trim(), createdAt: Date.now() });
-      return json({ id, status: 'queued_for_device' }, 202);
+      const online = [...agentDevices.values()].filter(device => Date.now() - device.lastSeen < 60_000);
+      if (online.length !== 1) return json({ error: 'device_id_required' }, 400);
+      const task = agentQueue.enqueue(online[0].id, 'send_sms', body.to, body.body.trim(), request.headers.get('Idempotency-Key') || undefined);
+      return json({ id: task.id, status: task.status, device_id: online[0].id }, 202);
     }
     return json({ error: 'sms_consumer_unavailable' }, 503);
   }
   const messageMatch = url.pathname.match(/^\/v1\/messages\/([\w-]+)$/);
-  if (request.method === 'GET' && messageMatch && durableQueue) {
-    const task = durableQueue.get(messageMatch[1]);
+  if (request.method === 'GET' && messageMatch) {
+    const apkTask = agentQueue.get(messageMatch[1]);
+    if (apkTask) return json({ id: apkTask.id, status: apkTask.status, device_id: apkTask.device_id,
+      evidence: apkTask.status === 'sent' ? 'android_sms_sent_callback' : null, recipient_delivery_confirmed: false });
+    const task = durableQueue?.get(messageMatch[1]);
     return task ? json({ id: task.id, status: task.status,
       evidence: task.status === 'sent' ? 'android_sent_store' : null,
       recipient_delivery_confirmed: false }) : json({ error: 'not_found' }, 404);
@@ -239,16 +283,18 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
   if (request.method === 'GET' && url.pathname === '/v1/agent') {
     return json({
       devices: [...agentDevices.values()],
-      queue: agentQueue.map(({ id, type, to, createdAt }) => ({ id, type, to, createdAt })),
+      queue: agentQueue.pending().map(({ id, device_id, type, to, createdAt }) => ({ id, device_id, type, to, createdAt })),
       results: agentResults.slice(0, 20),
       durable_queue: durableQueue?.counts() || {},
     });
   }
   // Queue a no-op task to verify a phone agent's poll-execute-report loop.
   if (request.method === 'POST' && url.pathname === '/v1/agent/ping') {
-    const id = randomUUID();
-    agentQueue.push({ id, type: 'ping', createdAt: Date.now() });
-    return json({ id, queued: agentQueue.length }, 202);
+    const body = await request.json().catch(() => null) as { device_id?: unknown } | null;
+    const deviceId = typeof body?.device_id === 'string' ? body.device_id : '';
+    if (!agentDevices.has(deviceId)) return json({ error: 'known_device_id_required' }, 400);
+    const task = agentQueue.enqueue(deviceId, 'ping', undefined, undefined, randomUUID());
+    return json({ id: task.id, device_id: deviceId }, 202);
   }
   const match = url.pathname.match(/^\/v1\/verifications\/([\w-]+)\/check$/);
   if (request.method === 'POST' && match) {
