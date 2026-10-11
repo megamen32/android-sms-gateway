@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
 
         root.addView(label("Токен устройства"));
         tokenField = new EditText(this);
+        tokenField.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         tokenField.setHint("sms_dev_...");
         tokenField.setText(prefs.getString("token", ""));
         root.addView(tokenField);

@@ -108,6 +108,7 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     return new Response(request.method === 'HEAD' ? null : file, { headers: {
       'Content-Type': 'application/vnd.android.package-archive',
       'Content-Disposition': 'attachment; filename="userio-sms-agent.apk"',
+      'Content-Length': String(file.size),
       'Cache-Control': 'no-cache',
     } });
   }
@@ -140,9 +141,11 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
       const taskId = typeof body?.task_id === 'string' ? body.task_id : '';
       const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
       if (!taskId || !deviceId || typeof body?.status !== 'string') return json({ error: 'task_id, device_id and status required' }, 400);
+      const previous = agentQueue.get(taskId);
       if (!agentQueue.finish(deviceId, taskId, body.status, typeof body.error === 'string' ? body.error : undefined)) {
         return json({ error: 'unknown_task_or_result_conflict' }, 409);
       }
+      if (previous?.status === body.status) return json({ ok: true });
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: Date.now() };
       device.lastSeen = Date.now();
       if (body.status === 'sent' || body.status === 'ok') device.tasksDone += 1;
@@ -218,6 +221,9 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     if (!validPhone(body?.to)) return json({ error: 'to must be E.164' }, 400);
     if (typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 480) {
       return json({ error: 'body must be non-empty and at most 480 characters' }, 400);
+    }
+    if (body.device_id !== undefined && (typeof body.device_id !== 'string' || !body.device_id.trim())) {
+      return json({ error: 'device_id must be a non-empty string' }, 400);
     }
     const serial = typeof body?.device_serial === 'string' && body.device_serial.trim() ? body.device_serial.trim() : defaultSerial;
     const agentId = typeof body?.device_id === 'string' ? body.device_id.trim() :
