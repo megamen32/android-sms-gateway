@@ -2,6 +2,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { SmsQueue, SshTermuxTransport } from './termux-queue';
 import { gatewayHealth } from './health';
 import { AgentQueue } from './agent-queue';
+import { historyOptions } from './native-history';
 
 const port = Number(process.env.PORT || 8787);
 const apiKey = process.env.SMS_GATEWAY_API_KEY;
@@ -190,6 +191,18 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     inbound.splice(100); return json({ accepted });
   }
   if (request.headers.get('authorization') !== `Bearer ${apiKey}`) return json({ error: 'unauthorized' }, 401);
+  if (request.method === 'GET' && url.pathname === '/v1/history') {
+    let options;
+    try { options = historyOptions(url.searchParams); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : 'invalid_history_query' }, 400); }
+    if (!termux) return json({ error: 'native_history_not_configured' }, 503);
+    try {
+      const page = await termux.history(options);
+      const receipts = durableQueue?.historyReceiptIds(page.messages, options.after_id === 0 && !page.has_more) || {};
+      for (const message of page.messages) if (receipts[message.provider_id]) message.receipt_id = receipts[message.provider_id];
+      return json({ ...page, device_serial: defaultSerial, transport: 'ssh-termux-api', after_id: options.after_id });
+    } catch { return json({ error: 'native_history_unavailable' }, 503); }
+  }
   if (request.method === 'GET' && url.pathname === '/v1/device') return json({ serial: defaultSerial,
     online: termux ? await termux.ready() : await deviceOnline(defaultSerial), transport: termux ? 'ssh-termux-api' : 'apk-agent' });
   if (request.method === 'GET' && url.pathname === '/v1/devices') return json({ default_serial: defaultSerial, devices: await devices(), transport: 'adb-termux-api' });

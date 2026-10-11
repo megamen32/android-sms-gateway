@@ -7,6 +7,23 @@ mode="${1:?}"; expected_uid="${2:?}"; expected_model="${3:?}"
 if [[ "$mode" = probe ]]; then
     exec timeout 15 termux-sms-list --message-type=sent --message-limit=0
 fi
+if [[ "$mode" = history_snapshot ]]; then
+    exec timeout 15 termux-sms-list --message-type=all --message-limit=1 \
+        --message-sort-order='_id DESC' --message-return-no-order-reverse
+fi
+if [[ "$mode" = history ]]; then
+    IFS= read -r after_id
+    IFS= read -r snapshot_id
+    IFS= read -r page_limit
+    [[ "$after_id" =~ ^[0-9]+$ && "$snapshot_id" =~ ^[0-9]+$ && "$page_limit" =~ ^[0-9]+$ ]] || exit 26
+    [[ "$page_limit" -ge 1 && "$page_limit" -le 101 ]] || exit 26
+    printf '{"timezone":"%s","messages":' "$(date +%z)"
+    timeout 15 termux-sms-list --message-type=all --message-limit="$page_limit" \
+        --message-selection="_id > $after_id AND _id <= $snapshot_id" \
+        --message-sort-order='_id ASC' --message-return-no-order-reverse
+    printf '}\n'
+    exit 0
+fi
 [[ "$mode" = send ]] || exit 21
 IFS= read -r task_id
 IFS= read -r recipient

@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { historyMessage, type SmsHistoryMessage } from './native-history';
 
 export type Task = { id: string; recipient: string; body: string; status: string; created: number; expires: number };
 export interface Transport {
@@ -21,6 +22,8 @@ export class SmsQueue {
       CREATE TABLE IF NOT EXISTS sms_tasks (
         id TEXT PRIMARY KEY, dedupe TEXT UNIQUE, recipient TEXT NOT NULL, body TEXT NOT NULL,
         status TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS sms_provider_receipts (
+        provider_id TEXT PRIMARY KEY, task_id TEXT UNIQUE NOT NULL);
       UPDATE sms_tasks SET status='unknown' WHERE status='sending';`);
   }
   enqueue(to: string, body: string, key?: string, allowNew: () => boolean = () => true,
@@ -47,6 +50,26 @@ export class SmsQueue {
   counts(): Record<string, number> {
     return Object.fromEntries((this.db.query('SELECT status, COUNT(*) AS n FROM sms_tasks GROUP BY status').all() as
       { status: string; n: number }[]).map(row => [row.status, row.n]));
+  }
+  historyReceiptIds(messages: SmsHistoryMessage[], completeSnapshot: boolean): Record<string, string> {
+    const matches = (message: SmsHistoryMessage, task: Task) => message.type === 'sent' &&
+      message.contact_number.replace(/\D/g, '') === task.recipient.replace(/\D/g, '') &&
+      message.body === task.body && message.date_ms >= task.created - 5000 && message.date_ms <= task.expires;
+    if (completeSnapshot) {
+      const tasks = this.db.query("SELECT * FROM sms_tasks WHERE status='sent'").all() as Task[];
+      for (const task of tasks) {
+        const rows = messages.filter(message => matches(message, task));
+        if (rows.length !== 1 || tasks.filter(other => matches(rows[0], other)).length !== 1) continue;
+        this.db.query('INSERT OR IGNORE INTO sms_provider_receipts VALUES (?,?)').run(rows[0].provider_id, task.id);
+      }
+    }
+    const known = Object.fromEntries((this.db.query('SELECT provider_id, task_id FROM sms_provider_receipts').all() as
+      { provider_id: string; task_id: string }[]).map(row => [row.provider_id, row.task_id]));
+    return Object.fromEntries(messages.filter(message => {
+      const task = known[message.provider_id] ? this.get(known[message.provider_id]) : null;
+      return task?.status === 'sent' && matches(message, task);
+    }).map(message =>
+      [message.provider_id, known[message.provider_id]]));
   }
   async tick(): Promise<void> {
     if (this.running) return;
@@ -114,6 +137,29 @@ export class SshTermuxTransport implements Transport {
       const result = JSON.parse(await this.call('probe'));
       return Array.isArray(result) || Array.isArray(result?.messages);
     } catch { return false; }
+  }
+  async history(options: { limit: number; after_id: number; snapshot_id: number }) {
+    let snapshot_id = options.snapshot_id;
+    if (!snapshot_id) {
+      const latest = JSON.parse(await this.call('history_snapshot'));
+      if (!Array.isArray(latest)) throw new Error('invalid_native_history_snapshot');
+      snapshot_id = latest[0]?._id ?? 0;
+      if (!Number.isSafeInteger(snapshot_id) || snapshot_id < 0) throw new Error('invalid_native_history_snapshot');
+    }
+    const raw = JSON.parse(await this.call('history', `${options.after_id}\n${snapshot_id}\n${options.limit + 1}\n`));
+    if (!Array.isArray(raw.messages) || !/^[+-]\d{4}$/.test(raw.timezone)) throw new Error('invalid_native_history_page');
+    const messages = raw.messages.map((row: unknown) => historyMessage(row, raw.timezone)) as SmsHistoryMessage[];
+    let previous = options.after_id;
+    for (const message of messages) {
+      const id = Number(message.provider_id);
+      if (id <= previous || id > snapshot_id) throw new Error('invalid_native_history_order');
+      previous = id;
+    }
+    const has_more = messages.length > options.limit;
+    const page = messages.slice(0, options.limit);
+    return { messages: page, snapshot_id, has_more,
+      next_after_id: page.length ? Number(page[page.length - 1].provider_id) : options.after_id,
+      timestamp_precision: 'second', timezone: raw.timezone, order: 'provider_id_asc' };
   }
   async send(task: Task): Promise<boolean> {
     const raw = await this.call('send', `${task.id}\n${task.recipient}\n${task.expires}\n${task.body}`);
