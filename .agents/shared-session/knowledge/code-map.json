@@ -3,16 +3,16 @@
     "apk-tenant-token-enrollment": {
       "confidence": "verified",
       "evidence": [
-        "Published APK1.1 code2 hash343cc17a verified; old runtime enrollRED not_found; two-user samephysical isolation + DB rotation/durable tests; callback503→sameID retry focusedGREEN"
+        "22 focused PASS plus binding-refusal delta2 PASS; fairness RED then focused1 PASS. Published/installed703c125; normal nonowner web setup and public scoped hello/one ping confirmed. Parent headed web connect/disconnect acceptance; final bindingfalse, old rotated-key tasks401, ownaccount absent, ping/native receipts preserved; no SMS/calls/phone operations."
       ],
-      "git_head": "d95909cd6b9f3b020cd02f8bbd7d15197fff1680",
+      "git_head": "703c125c4f53b68a0b840d34d0f11384213eca85",
       "key": "apk-tenant-token-enrollment",
       "kind": "production-path",
       "locations": [
         {
           "exists_at_verification": true,
           "observed_kind": "file",
-          "observed_sha256": "fd53618e53a3d2b59a71bb8f38fa41eaaa573afc01ce1189c37c396a2627562f",
+          "observed_sha256": "2e956b15722e2c62fce699839c70952b3366fa88a22bb3e0fd4e46edd0e5b0a7",
           "path": "src/agent-queue.ts",
           "symbol": ""
         },
@@ -26,7 +26,7 @@
         {
           "exists_at_verification": true,
           "observed_kind": "file",
-          "observed_sha256": "369f5d817ce4766850e6e3fda34afbba078dcade1c761c0e116847e1ce4f0115",
+          "observed_sha256": "6a16a32b8ebe5f8e0cae3362a7f8e8985d9bd22c11953ae80921f95723ebcab0",
           "path": "src/agent-enrollment.test.ts",
           "symbol": ""
         },
@@ -38,8 +38,8 @@
           "symbol": ""
         }
       ],
-      "summary": "UserIO cookie owns account/route; internal /v1/agent/enroll persists device-token hash and tenant alias in AgentQueue. APK physical IDs unchanged; binding GET gates claims/inbound, normal UserIO ingress_user callback uses exact scopedaccount, durable retries in existing process. Legacy/native unchanged.",
-      "verified_at": "2026-10-12T03:44:39.729757+03:00"
+      "summary": "UserIO cookie owns account/route; device-only opaque token hash binds user and physical phone to stable alias in existing AgentQueue. APK1.1 unchanged; authoritative binding gates claims/inbound, exact-account normal ingress callback retries durably and fairly by due time in existing process. Legacy/native unchanged.",
+      "verified_at": "2026-10-12T04:50:09.370830+03:00"
     },
     "native-history-in-place-pending-and-idle": {
       "confidence": "verified",

@@ -69,3 +69,33 @@ Delivery dependency: root's protected bindingGET/setup must be installed before
 gatewayenroll live path. Sourcepublish first; then onlygateway scopedrestart with
 acceptednativequeue/receipts preserved, protectedtwo-user fakehandshake/readback,
 no physicalAPK install/SMS. Parent owns customer web acceptance.
+
+Final acceptance: normal authenticated nonowner UserIO setup returned201 for its
+own phone account. Public scoped APK protocol hello returned registeredtrue;
+one durable ping552bc707-cca8-47ca-a5c2-602c91f5b25e claimed only its own alias,
+resultok and normal user account readback confirmed ownership. No synthetic
+incoming message, SMS, call or physical phone operation was performed.
+
+Fairness source703c125 published then installed04:35:59MSK, PID1440149,
+NRestarts0. Protected before/after receipts prove exact binding/token hash
+preservation and valid existing scoped key; native queue remains4sent/1expired,
+both earlier47dda/f18a receipts remain sent. APK1.1/code2 stays unchanged.
+
+Parent's actual headed website acceptance on UserIO34c/gateway703 completed:
+public rooted/unrooted SMS guide, advanced calls instructions and APK download;
+normal nonowner login, same own phone form, masked token/server success, normal
+Disconnect/confirmation, then no remaining connections. Only the QA account was
+removed; owner login restored with13 accounts, own browser closed and temporary
+remote credential/image copies removed. Existing native S21 and voice unchanged.
+
+Final protected binding GET200 returns registeredfalse/readfalse/replyfalse;
+normal user account readback confirms fixture account absent. Old context key
+receives tasks401 because website rotated that key before disconnect; this is
+token revocation evidence, independently of authoritative account disablement.
+No new key was minted for a second live probe; deleted-binding403 is covered by
+focused tests. Original ping remainsok; old native receipts remain sent and
+native22 history/continuous-sync proof is preserved. QA user remains for parent
+ownership. Evidence: ignored protected .tmp/apk-user-enroll/qa-live-protocol-intent.json,
+before-fairness-install.json, after-fairness-install.json, qa-after-web-remove.json.
+Consumer acceptance and cleanup complete; this post-canary publication changes
+only tracker/code map, with runtime703/PID1440149 retained and no further restart.
