@@ -58,3 +58,26 @@ Root received READY API/schema/proof, including required35sclienttimeout
 (generic8s is insufficient for coldfirstpage), exactreceipt20 mapping and
 GSM2SIP archive capability/count. UserIOimport/UI/accountprojection remains
 parent-owned; that final usersurface claim is not made by this gateway line.
+
+Continuous-sync audit: source/runtime925ba85, PID181937, authenticated after20
+returned200/9.26s, snapshot20/no new rows; accepted47dda remains sent. No newly
+arriving SMS has been sent or observed in this audit. No replay or UI action.
+Confirmed failure shield: Android outbox4/queued6 can mutate to sent2 at the same
+providerID after a later inbox row moves the cursor. Original transport regression
+was RED for both outbox and queued; pending rows were misprojected as outgoing
+and forgotten. Root rejected a blocking barrier because it can starve incoming.
+Settled contract: bounded pending_ids CSV request/list response, independent
+new-page watermark, merged completed pending rows, no new worker/daemon. Cases
+cover late sent21 after inbox22, long pending across >100 new rows, deleted
+pending, fresh retry after transport failure and refusal of foreign pending IDs.
+
+Second confirmed cause: productionjournal03:10:47 reports Bun request timed out
+after10seconds, matching UserIO RemoteDisconnected. /v1/history now uses the
+official Bun server.timeout(request,75), preserving other route deadlines.
+Native snapshot20s + page/pending40s, client65s. Focused HTTP regression delays
+the provider11seconds through a test-only SSH PATH and expects a real HTTP200;
+no physical phone, sender or production route is altered by the test.
+Fast unit expected3s/max20s:14PASS2.24s including no-replay/expiry guards.
+Focused integration expected12s/max25s, sourcepublish/install and live read proof
+are required before claiming continuous source readiness. Parent owns UserIO
+durable pending/cursor polling and its real consumer acceptance.

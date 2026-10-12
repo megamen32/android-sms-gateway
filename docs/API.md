@@ -21,9 +21,26 @@ uses `You` for outgoing rows, which is not exposed as a contact name.
 `snapshot_id` until `has_more` is false. The fixed upper ID prevents new arrivals
 from shifting pages. Start the next incremental read with the previous final
 ID and omit `snapshot_id` (or use zero) to obtain a new upper bound. Invalid
-cursors return 400, and unavailable native history returns 503. Consumers should
-allow a bounded 35-second request timeout: the first page may perform a snapshot
-read and a page read, each with a 15-second phone deadline.
+cursors return 400, and unavailable native history returns 503.
+
+For continuous synchronization, persist `pending_ids` alongside `next_after_id`.
+Pass those IDs as `pending_ids=21,23` on subsequent pages and polls (at most 100
+positive IDs, each at or below `after_id`). Android changes outbox/queued rows
+to sent in place, without allocating a new ID. The response's `pending_ids`
+contains rows still waiting for that transition. Pending rows are omitted from
+`messages`; settled pending rows are merged into `messages` even when their IDs
+are below the new-row cursor. Such old IDs can only be from the requested pending
+set. A deleted pending row is removed from the set. The new-page watermark and
+`has_more` advance independently, so one long-queued SMS never blocks later
+incoming pages. Native provider IDs remain the deduplication identity.
+
+Allow a bounded **65-second** client timeout for this route. Snapshot SSH is
+bounded to 20 seconds; a page plus
+optional pending recheck is bounded to 40 seconds. Only this HTTP request gets a
+75-second Bun idle timeout; other routes retain their existing timeout. A read
+failure or pending set exceeding 100 returns 503: retain both previous cursor
+and pending set and retry the read, never a send. Every HTTP request opens new
+pinned SSH calls and reads the current provider; there is no history cache.
 
 Optional `receipt_id` links an outgoing Android row to an existing durable
 gateway receipt. A new link is created only when a complete stable snapshot

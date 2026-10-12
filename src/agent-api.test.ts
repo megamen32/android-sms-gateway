@@ -1,5 +1,37 @@
 import { test, expect } from 'bun:test';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+test('native history HTTP waits for a bounded provider response beyond Bun default idle deadline', async () => {
+  const directory = resolve(`.tmp/agent-tests/history-${crypto.randomUUID()}`);
+  mkdirSync(directory, { recursive: true });
+  // Test-only child PATH: no physical phone, provider action or runtime process is touched.
+  writeFileSync(`${directory}/ssh`, `#!/bin/bash
+case "\${@: -1}" in
+  *history_snapshot*) /bin/sleep 11; printf '[{"_id":20}]';;
+  *history*) printf '{"timezone":"+0300","messages":[],"pending_messages":[]}';;
+  *) exit 1;;
+esac
+`, { mode: 0o700 });
+  const port = 20880 + Math.floor(Math.random() * 1000);
+  const child = Bun.spawn([process.execPath, 'src/server.ts'], { env: {
+    ...Bun.env, PATH: `${directory}:${Bun.env.PATH}`, PORT: String(port), HOST: '127.0.0.1',
+    SMS_GATEWAY_API_KEY: 'fixture-api', SMS_GATEWAY_DEVICE_TOKEN: 'fixture-device', ANDROID_SERIAL: 'native-fixture',
+    SMS_SSH_HOST: 'fixture', SMS_SSH_EXPECTED_UID: '1', SMS_QUEUE_PATH: `${directory}/native.sqlite`,
+    SMS_AGENT_QUEUE_PATH: `${directory}/agent.sqlite`, UNIVERSAL_USERIO_URL: '', USERIO_API_TOKEN: '',
+  }, stdout: 'ignore', stderr: 'ignore' });
+  try {
+    for (let i = 0; i < 40; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); break; } catch { await Bun.sleep(25); }
+    }
+    const response = await fetch(`http://127.0.0.1:${port}/v1/history?after_id=20`, {
+      headers: { Authorization: 'Bearer fixture-api' }, signal: AbortSignal.timeout(15_000),
+    });
+    expect(response.status).toBe(200);
+    const page = await response.json() as any;
+    expect(page.next_after_id).toBe(20); expect(page.pending_ids).toEqual([]);
+  } finally { child.kill(); await child.exited; }
+}, 18_000);
 
 test('explicit APK account bypasses the native phone and reports registration failure honestly', async () => {
   mkdirSync('.tmp/agent-tests', { recursive: true });

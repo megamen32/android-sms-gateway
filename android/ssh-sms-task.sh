@@ -15,12 +15,29 @@ if [[ "$mode" = history ]]; then
     IFS= read -r after_id
     IFS= read -r snapshot_id
     IFS= read -r page_limit
+    IFS= read -r pending_ids || pending_ids=''
     [[ "$after_id" =~ ^[0-9]+$ && "$snapshot_id" =~ ^[0-9]+$ && "$page_limit" =~ ^[0-9]+$ ]] || exit 26
     [[ "$page_limit" -ge 1 && "$page_limit" -le 101 ]] || exit 26
+    [[ -z "$pending_ids" || "$pending_ids" =~ ^[0-9]+(,[0-9]+)*$ ]] || exit 26
+    if [[ -n "$pending_ids" ]]; then
+        IFS=, read -ra pending_values <<< "$pending_ids"
+        [[ "${#pending_values[@]}" -le 100 ]] || exit 26
+        for pending_id in "${pending_values[@]}"; do
+            [[ "$pending_id" -ge 1 && "$pending_id" -le "$after_id" ]] || exit 26
+        done
+    fi
     printf '{"timezone":"%s","messages":' "$(date +%z)"
     timeout 15 termux-sms-list --message-type=all --message-limit="$page_limit" \
         --message-selection="_id > $after_id AND _id <= $snapshot_id" \
         --message-sort-order='_id ASC' --message-return-no-order-reverse
+    printf ',"pending_messages":'
+    if [[ -n "$pending_ids" ]]; then
+        timeout 15 termux-sms-list --message-type=all --message-limit=100 \
+            --message-selection="_id IN ($pending_ids)" \
+            --message-sort-order='_id ASC' --message-return-no-order-reverse
+    else
+        printf '[]'
+    fi
     printf '}\n'
     exit 0
 fi

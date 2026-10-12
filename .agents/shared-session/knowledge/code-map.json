@@ -1,0 +1,60 @@
+{
+  "entries": {
+    "native-history-in-place-pending-and-idle": {
+      "confidence": "verified",
+      "evidence": [
+        "Native transport RED outbox+queued;14 focused unit GREEN2.24s;11s delayed real HTTP GREEN12.18s; production Bun journal03:10:47 timeout10s"
+      ],
+      "git_head": "925ba8590288c431124a778a534dd0cc346f53cf",
+      "key": "native-history-in-place-pending-and-idle",
+      "kind": "failure-shield",
+      "locations": [
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "2d9654a36768de8d6ba5fcea48309b7c9c923c0ac82fa602e7aa3cc32a41b775",
+          "path": "src/termux-queue.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "07a5c754a0805de2b8fb42586075e8fe1efd6c920aafebf3255bd8ae9cf1604b",
+          "path": "src/native-history.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "d2bea0c313162aec6da9bf519d758b171e96679a3b60fd41ec2db557f0abded1",
+          "path": "src/server.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "d03fd17b225937d717bb9e861366868abdaabb45d2705bc2c814e9826fbc4a03",
+          "path": "android/ssh-sms-task.sh",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "990e6ced9fb020316819c664068de31c3f61c1f1eae673741efd540fbd9db1a4",
+          "path": "src/native-history.test.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "18c81b6a4e9f85fa0a5c123e8928ca94862dd0cfd3e95d7b43cb3a7c72ebfefb",
+          "path": "src/agent-api.test.ts",
+          "symbol": ""
+        }
+      ],
+      "summary": "Native SMS outbox/queued mutates same ID; keep bounded pending_ids independent of new watermark. Bun default10s aborts native reads; route-specific75s idle,20+40s native bounds.",
+      "verified_at": "2026-10-12T03:17:20.786059+03:00"
+    }
+  },
+  "schema_version": 1
+}

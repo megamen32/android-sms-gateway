@@ -13,7 +13,14 @@ export function historyOptions(query: URLSearchParams) {
   };
   const limit = integer('limit', 100), after_id = integer('after_id', 0), snapshot_id = integer('snapshot_id', 0);
   if (limit < 1 || limit > 100) throw new Error('history_limit_must_be_1_to_100');
-  return { limit, after_id, snapshot_id };
+  const rawPending = query.get('pending_ids') || '';
+  if (rawPending && !/^\d+(,\d+)*$/.test(rawPending)) throw new Error('invalid_history_pending_ids');
+  if (rawPending && rawPending.split(',').length > 100) throw new Error('invalid_history_pending_ids');
+  const pending_ids = rawPending ? [...new Set(rawPending.split(',').map(Number))] : [];
+  if (pending_ids.length > 100 || pending_ids.some(id => !Number.isSafeInteger(id) || id < 1 || id > after_id)) {
+    throw new Error('invalid_history_pending_ids');
+  }
+  return { limit, after_id, snapshot_id, pending_ids };
 }
 
 export function historyMessage(row: any, timezone: string): SmsHistoryMessage {

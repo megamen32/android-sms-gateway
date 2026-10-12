@@ -123,7 +123,7 @@ export class SshTermuxTransport implements Transport {
       ...(this.hostKeyAlias ? ['-o', `HostKeyAlias=${this.hostKeyAlias}`] : []),
       `${this.user}@${this.host}`, `${this.helper} ${mode} ${this.uid} ${this.model}`],
     { stdin: new Blob([input]), stdout: 'pipe', stderr: 'pipe' });
-    const timer = setTimeout(() => process.kill(), 45_000);
+    const timer = setTimeout(() => process.kill(), mode === 'history_snapshot' ? 20_000 : mode === 'history' ? 40_000 : 45_000);
     try {
       const [stdout, , exit] = await Promise.all([
         new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited,
@@ -138,7 +138,8 @@ export class SshTermuxTransport implements Transport {
       return Array.isArray(result) || Array.isArray(result?.messages);
     } catch { return false; }
   }
-  async history(options: { limit: number; after_id: number; snapshot_id: number }) {
+  async history(options: { limit: number; after_id: number; snapshot_id: number; pending_ids?: number[] }) {
+    const requestedPending = new Set(options.pending_ids || []);
     let snapshot_id = options.snapshot_id;
     if (!snapshot_id) {
       const latest = JSON.parse(await this.call('history_snapshot'));
@@ -146,8 +147,9 @@ export class SshTermuxTransport implements Transport {
       snapshot_id = latest[0]?._id ?? 0;
       if (!Number.isSafeInteger(snapshot_id) || snapshot_id < 0) throw new Error('invalid_native_history_snapshot');
     }
-    const raw = JSON.parse(await this.call('history', `${options.after_id}\n${snapshot_id}\n${options.limit + 1}\n`));
-    if (!Array.isArray(raw.messages) || !/^[+-]\d{4}$/.test(raw.timezone)) throw new Error('invalid_native_history_page');
+    const raw = JSON.parse(await this.call('history', `${options.after_id}\n${snapshot_id}\n${options.limit + 1}\n${[...requestedPending].join(',')}\n`));
+    if (!Array.isArray(raw.messages) || !Array.isArray(raw.pending_messages) || raw.pending_messages.length > 100 ||
+      !/^[+-]\d{4}$/.test(raw.timezone)) throw new Error('invalid_native_history_page');
     const messages = raw.messages.map((row: unknown) => historyMessage(row, raw.timezone)) as SmsHistoryMessage[];
     let previous = options.after_id;
     for (const message of messages) {
@@ -157,7 +159,18 @@ export class SshTermuxTransport implements Transport {
     }
     const has_more = messages.length > options.limit;
     const page = messages.slice(0, options.limit);
-    return { messages: page, snapshot_id, has_more,
+    const pending = (raw.pending_messages as unknown[]).map(row => historyMessage(row, raw.timezone));
+    const pendingIds = pending.map(message => Number(message.provider_id));
+    if (new Set(pendingIds).size !== pendingIds.length || pendingIds.some(id => !requestedPending.has(id))) {
+      throw new Error('invalid_native_history_pending');
+    }
+    // Android mutates outbox/queued in place. Recheck those IDs independently of the new-row watermark.
+    // Termux:API 0.53 maps Android queued(6) to an empty type string.
+    const unsettled = (message: SmsHistoryMessage) => ['outbox', 'queued', ''].includes(message.type);
+    const pending_ids = [...new Set([...page, ...pending].filter(unsettled).map(message => Number(message.provider_id)))];
+    if (pending_ids.length > 100) throw new Error('native_history_pending_limit');
+    const settled = [...page, ...pending].filter(message => !unsettled(message)).sort((a, b) => Number(a.provider_id) - Number(b.provider_id));
+    return { messages: settled, pending_ids, snapshot_id, has_more,
       next_after_id: page.length ? Number(page[page.length - 1].provider_id) : options.after_id,
       timestamp_precision: 'second', timezone: raw.timezone, order: 'provider_id_asc' };
   }

@@ -92,7 +92,7 @@ async function registerAgentAccount(device: AgentDevice) {
   }
 }
 
-Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request) {
+Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request, server) {
   const url = new URL(request.url);
   if (url.pathname === '/health') {
     const android = termux ? await termux.ready() : await deviceOnline(defaultSerial);
@@ -192,13 +192,15 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
   }
   if (request.headers.get('authorization') !== `Bearer ${apiKey}`) return json({ error: 'unauthorized' }, 401);
   if (request.method === 'GET' && url.pathname === '/v1/history') {
+    // Two bounded SSH calls may take up to 60s. Bun's default 10s idle timer closes an active read early.
+    server.timeout(request, 75);
     let options;
     try { options = historyOptions(url.searchParams); }
     catch (error) { return json({ error: error instanceof Error ? error.message : 'invalid_history_query' }, 400); }
     if (!termux) return json({ error: 'native_history_not_configured' }, 503);
     try {
       const page = await termux.history(options);
-      const receipts = durableQueue?.historyReceiptIds(page.messages, options.after_id === 0 && !page.has_more) || {};
+      const receipts = durableQueue?.historyReceiptIds(page.messages, options.after_id === 0 && !page.has_more && !page.pending_ids.length) || {};
       for (const message of page.messages) if (receipts[message.provider_id]) message.receipt_id = receipts[message.provider_id];
       return json({ ...page, device_serial: defaultSerial, transport: 'ssh-termux-api', after_id: options.after_id });
     } catch { return json({ error: 'native_history_unavailable' }, 503); }
