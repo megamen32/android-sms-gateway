@@ -81,3 +81,31 @@ Fast unit expected3s/max20s:14PASS2.24s including no-replay/expiry guards.
 Focused integration expected12s/max25s, sourcepublish/install and live read proof
 are required before claiming continuous source readiness. Parent owns UserIO
 durable pending/cursor polling and its real consumer acceptance.
+
+DELIVERED254599b published main before dependent install. Existing phone helper
+matched runtime925ba85 byte-for-byte; atomically replaced with published helper,
+sender unchanged. Runtime ff installed254599b and scoped gateway restart03:19:45
+MSK/PID688728; no UserIO source/runtime changes. Native queue3sent/1expired before
+canary. Source code/HTTP tests16PASS total14.42s, build and shell syntax PASS.
+Live after20,pending20 returned old settled20/47dda with200 in13.47s (past the
+former10s HTTP cutoff), then after20 empty and complete20rows both returned200.
+Protected continuous-proof.json records metadata; complete private native page
+gateway-continuous-full.json is0600. No frozen cache or source/helper drift.
+
+Parent authorized ONEnew selfSMS after all source/install/restart checks finished.
+Own SIM provenance: exact accepted47dda body in Mac incoming SMSrow10288, sender
+handle plus11digits ending0755; protected own-sim-provenance.json. Fresh guarded
+phone identity SM-G998B/R5CR702SRFP, native baseline20, queue3sent/1expired.
+Durable0600 continuous-self-sms-intent.json existed before single authenticated
+POST/v1/messages with unique idempotency/body; pre-attempt flag persisted.
+Receiptf18a3f3d-f077-45c1-9a1a-62896c885d6c202→sent/android_sent_store. No repeat,
+no old47dda replay, no source/runtime changes until readback capture completed.
+Fresh historyafter20 returned200/9.47s, snapshot22/next22/pending[]; exact newbody
+and ownrecipient match two real provider rows21sent/outgoing +22inbox/incoming.
+Body SHA256ea3968644e9229a913634fc496f83c3ad7b54c6e41458b8f4961501e4d487202.
+Native inbox22 independently proves receipt on the phone; gateway deliveryflag
+remainsfalse because its sent-receipt API only promises submission.
+Private continuous-self-sms-native-readback.json/intent state preserve result.
+Leaseab3f96… releasedFREE, gatewayPID688728/NRestarts0/~31.5MiB/5tasks. Parent
+checks new21/22 through ordinary UserIOdaemon (no manual poll/reset/import);
+final UserIOsurface is parent-owned. No further SMS/call is planned or replayed.
