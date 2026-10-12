@@ -109,3 +109,11 @@ Private continuous-self-sms-native-readback.json/intent state preserve result.
 Leaseab3f96… releasedFREE, gatewayPID688728/NRestarts0/~31.5MiB/5tasks. Parent
 checks new21/22 through ordinary UserIOdaemon (no manual poll/reset/import);
 final UserIOsurface is parent-owned. No further SMS/call is planned or replayed.
+
+Parent actual continuous consumer PASS: ordinary existing UserIOdaemon imported
+new21outgoing and22incoming with exact bodySHA above, persisted cursor20→22 and
+pending[]. Parent used ONLY normalGET, manualpoll/reset/import/sends0. Private
+UserIO/.tmp/sms-continuous/automatic-live-arrivals.json proves automatic arrival,
+phone→UserIO19s/outgoing and18s/incoming; original47dda history preserved. Gateway
+native result, installed source, real recipient inbox, and normal product daemon
+now form the completed proof chain. No further suite, SMS or runtime restart.
