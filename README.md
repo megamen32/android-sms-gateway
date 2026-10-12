@@ -66,14 +66,16 @@ The queue consumer runs inside the existing gateway process; do not start a sepa
 
 ## APK agent (no ADB, no Termux)
 
-[`android/apk`](android/apk) is a tiny (~18 KB) installable Android agent. The
+[`android/apk`](android/apk) is a small (~32 KB) installable Android agent. The
 phone polls the gateway over WiFi for tasks, sends SMS through `SmsManager`
 and relays every incoming SMS back — no USB cable, no Termux, survives reboot.
 
 1. Build the APK: `cd android/apk && gradle assembleDebug` (Android SDK 34, Gradle 8.9).
-2. Install it on the phone, open **SMS Agent**, enter the gateway URL and the
-   device token (`SMS_GATEWAY_DEVICE_TOKEN`), grant the SMS permissions and
-   disable battery optimization for reliable polling.
+2. Install it on the phone, open **SMS Agent**, and copy its displayed device ID
+   into your authenticated UserIO phone setup. Enter the gateway URL and the
+   device-only token returned by that setup, grant SMS permissions and disable
+   battery optimization for reliable polling. Never put the shared gateway or
+   UserIO service key on a user's phone.
 3. The phone registers via `POST /agent/hello`, then long-cycles
    `GET /agent/tasks` every `AGENT_POLL_MS` seconds.
 
@@ -98,6 +100,14 @@ when deployment keeps build output elsewhere. The configuration screen requires
 the gateway URL and device token; never include the token in the download URL.
 `POST /agent/hello` returns `account_registered:false` when UserIO registration
 fails, and the phone re-registers every minute after connectivity returns.
+
+The same SMS APK works on rooted and unrooted Android 8+ phones; root is not
+required. It supports SMS, not voice calls. The operator's existing rooted S21
+keeps its native SSH SMS and GSM2SIP voice routes. New-user APK enrollment uses
+an opaque per-device token and an account scoped to that UserIO user; the APK's
+URL/token fields are unchanged. See the [enrollment contract](docs/API.md).
+APK1.1 relays newly received SMS while running; it does not backfill the phone's
+old archive or retry an incoming upload lost before the gateway receives it.
 
 The runtime budget is 128/256 MiB soft/hard RAM, no swap, one CPU, 64 tasks and
 IOWeight 10. Before this change the service used 9.3 MiB and 12 tasks on

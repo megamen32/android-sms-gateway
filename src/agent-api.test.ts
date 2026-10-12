@@ -2,6 +2,11 @@ import { test, expect } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+async function availablePort(): Promise<number> {
+  const server = Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response('fixture')});
+  const port=server.port;await server.stop(true);return port;
+}
+
 test('native history HTTP waits for a bounded provider response beyond Bun default idle deadline', async () => {
   const directory = resolve(`.tmp/agent-tests/history-${crypto.randomUUID()}`);
   mkdirSync(directory, { recursive: true });
@@ -13,7 +18,7 @@ case "\${@: -1}" in
   *) exit 1;;
 esac
 `, { mode: 0o700 });
-  const port = 20880 + Math.floor(Math.random() * 1000);
+  const port = await availablePort();
   const child = Bun.spawn([process.execPath, 'src/server.ts'], { env: {
     ...Bun.env, PATH: `${directory}:${Bun.env.PATH}`, PORT: String(port), HOST: '127.0.0.1',
     SMS_GATEWAY_API_KEY: 'fixture-api', SMS_GATEWAY_DEVICE_TOKEN: 'fixture-device', ANDROID_SERIAL: 'native-fixture',
@@ -21,7 +26,7 @@ esac
     SMS_AGENT_QUEUE_PATH: `${directory}/agent.sqlite`, UNIVERSAL_USERIO_URL: '', USERIO_API_TOKEN: '',
   }, stdout: 'ignore', stderr: 'ignore' });
   try {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 120; i++) {
       try { await fetch(`http://127.0.0.1:${port}/health`); break; } catch { await Bun.sleep(25); }
     }
     const response = await fetch(`http://127.0.0.1:${port}/v1/history?after_id=20`, {
@@ -36,7 +41,7 @@ esac
 test('explicit APK account bypasses the native phone and reports registration failure honestly', async () => {
   mkdirSync('.tmp/agent-tests', { recursive: true });
   const suffix = crypto.randomUUID();
-  const port = 19880 + Math.floor(Math.random() * 1000);
+  const port = await availablePort();
   const serverProcess = Bun.spawn([process.execPath, 'src/server.ts'], { env: {
     ...Bun.env, PORT: String(port), HOST: '127.0.0.1', SMS_GATEWAY_API_KEY: 'fixture-api',
     SMS_GATEWAY_DEVICE_TOKEN: 'fixture-device', ANDROID_SERIAL: 'native-fixture',
@@ -54,7 +59,7 @@ test('explicit APK account bypasses the native phone and reports registration fa
     return { status: response.status, body: await response.json() as any };
   };
   try {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 120; i++) {
       try { await request('/v1/agent'); break; } catch { await Bun.sleep(25); }
     }
     const hello = await request('/agent/hello', { device_id: 'phone-a', model: 'fixture' }, true);

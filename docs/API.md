@@ -1,5 +1,50 @@
 # API
 
+## User-owned APK enrollment
+
+Existing APK1.1 keeps its physical `device_id` and URL/token fields. An authenticated
+UserIO web setup creates the user's SMS account and route, then calls internal
+`POST /v1/agent/enroll` with the existing gateway API key and
+`{user_id, device_id, account_id}`. `device_id` is 1–100 ASCII letters, digits,
+underscores, dots or hyphens. The gateway derives
+`gateway_device_id = user-<sha256(user_id)[:16]>-<device_id>` and requires
+`account_id = sms:<gateway_device_id>`.
+
+The 201 response contains `device_token`, the physical `device_id`, scoped
+`gateway_device_id`, `account_id`, and `user_id`. The opaque token is returned
+once and only its hash is stored in the existing agent queue database. Reenrolling
+the same user/device rotates that token without changing the account or queued
+task identity. Phones use it only with `/agent/hello`, `/agent/tasks`,
+`/agent/results` and `/agent/inbound`; supplied physical IDs must match the token.
+The gateway maps them to the scoped queue alias. A legacy owner device token
+cannot consume a scoped alias; existing legacy owner/native routes are retained.
+
+The gateway verifies account availability through the existing UserIO server
+credential and protected `GET /v1/sms/agent-binding?user_id=...&account_id=...`,
+which returns `{registered, can_read, can_reply}`. Enrollment requires registered;
+new task claims require registered and can_reply; incoming messages require
+registered and can_read. Scoped hello never creates an owner account. Result
+receipts for already claimed tasks remain recordable after account disablement.
+Unavailable binding returns 503; an unavailable account denies new work without
+falling back to an owner account or the shared native phone.
+
+Scoped incoming SMS are persisted before acknowledgement. The existing gateway
+process forwards at most one pending callback per tick to normal UserIO
+`POST /v1/messages` using `account_id`, `route_id: sms`, and a
+`universal.inbox.message.v1` envelope with source, stable message ID, sender,
+body, timestamp and direction. UserIO's existing `ingress_user` resolves the
+registered account owner. Failed callbacks retry after 15 seconds with the same
+identity; neither callbacks nor restarts resend SMS. Short and named sender
+addresses are accepted. These callbacks add no separate Android worker.
+
+The public APK URL is
+`https://msg.bezrabotnyi.com/sms-gateway/agent/download`; the APK server field is
+`https://msg.bezrabotnyi.com/sms-gateway`. No token belongs in either URL. This
+SMS setup supports rooted and unrooted phones through the same APK. Current APK
+limits remain: no old-history backfill, no offline incoming upload retry before
+gateway acknowledgement, and no voice calling. The operator's native S21 stays
+on its existing separate SMS/voice transports.
+
 ## Native phone history
 
 `GET /v1/history?limit=100&after_id=0` reads the pinned phone's actual Android

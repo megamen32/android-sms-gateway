@@ -1,7 +1,7 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { SmsQueue, SshTermuxTransport } from './termux-queue';
 import { gatewayHealth } from './health';
-import { AgentQueue } from './agent-queue';
+import { AgentQueue, enrollmentScope, type AgentBinding } from './agent-queue';
 import { historyOptions } from './native-history';
 
 const port = Number(process.env.PORT || 8787);
@@ -36,7 +36,7 @@ const termux = process.env.SMS_SSH_HOST ? new SshTermuxTransport(
   process.env.SMS_SSH_HOST_KEY_ALIAS,
 ) : null;
 const durableQueue = termux ? new SmsQueue(process.env.SMS_QUEUE_PATH || './state/sms.sqlite', termux) : null;
-if (durableQueue) setInterval(() => void durableQueue.tick(), 3000);
+setInterval(() => { if (durableQueue) void durableQueue.tick(); void relayAgentInbound(); }, 3000);
 
 async function devices(): Promise<Device[]> {
   const result = await Bun.$`adb devices -l`.quiet().nothrow();
@@ -92,6 +92,40 @@ async function registerAgentAccount(device: AgentDevice) {
   }
 }
 
+async function agentAccountBinding(binding: AgentBinding): Promise<{ registered: boolean; can_read: boolean; can_reply: boolean }> {
+  if (!process.env.UNIVERSAL_USERIO_URL || !process.env.USERIO_API_TOKEN) throw new Error('userio_binding_unavailable');
+  const url = new URL('/v1/sms/agent-binding', process.env.UNIVERSAL_USERIO_URL);
+  url.search = new URLSearchParams({ user_id: binding.user_id, account_id: binding.account_id }).toString();
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` }, signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error('userio_binding_unavailable');
+  const status = await response.json() as any;
+  if (typeof status.registered !== 'boolean' || typeof status.can_read !== 'boolean' || typeof status.can_reply !== 'boolean') throw new Error('invalid_userio_binding');
+  return status;
+}
+
+let relayingInbound = false;
+async function relayAgentInbound() {
+  if (relayingInbound) return;
+  const message = agentQueue.nextInbound(); if (!message) return;
+  relayingInbound = true;
+  let delivered = false;
+  try {
+    const binding = agentQueue.bindingForDevice(message.device_id);
+    if (!binding || binding.user_id !== message.user_id || binding.account_id !== message.account_id) return;
+    const status = await agentAccountBinding(binding);
+    if (!status.registered || !status.can_read) return;
+    const response = await fetch(new URL('/v1/messages', process.env.UNIVERSAL_USERIO_URL), {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` },
+      body: JSON.stringify({ account_id: message.account_id, route_id: 'sms', message: {
+        schema: 'universal.inbox.message.v1', source: 'sms', message_id: message.id,
+        sender: message.sender, body: message.body, received_at: message.received / 1000, direction: 'incoming',
+      } }), signal: AbortSignal.timeout(5000),
+    });
+    delivered = response.ok;
+  } catch { /* Retry only the durable ingress callback; never send an SMS. */ }
+  finally { agentQueue.completeInbound(message.id, delivered); relayingInbound = false; }
+}
+
 Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request, server) {
   const url = new URL(request.url);
   if (url.pathname === '/health') {
@@ -114,23 +148,37 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     } });
   }
   if (url.pathname.startsWith('/agent/')) {
-    if (request.headers.get('authorization') !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
+    const authorization = request.headers.get('authorization') || '';
+    const binding = authorization.startsWith('Bearer ') ? agentQueue.authenticate(authorization.slice(7)) : null;
+    if (!binding && authorization !== `Bearer ${deviceToken}`) return json({ error: 'unauthorized_device' }, 401);
+    const resolveDevice = (physical: string) => {
+      if (binding) return physical === binding.device_id ? binding.gateway_device_id : '';
+      // Legacy owner tokens cannot claim a scoped user's queue by its alias.
+      return agentQueue.bindingForDevice(physical) ? '' : physical;
+    };
     if (request.method === 'POST' && url.pathname === '/agent/hello') {
       const body = await request.json().catch(() => null) as { device_id?: unknown; model?: unknown; phone?: unknown } | null;
-      const deviceId = typeof body?.device_id === 'string' ? body.device_id.trim().slice(0, 128) : '';
+      const deviceId = resolveDevice(typeof body?.device_id === 'string' ? body.device_id.trim().slice(0, 128) : '');
       if (!deviceId) return json({ error: 'device_id required' }, 400);
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
       device.model = typeof body?.model === 'string' ? body.model.slice(0, 128) : device.model;
       device.phone = typeof body?.phone === 'string' ? body.phone.trim().slice(0, 24) : device.phone;
       device.lastSeen = Date.now();
       agentDevices.set(deviceId, device);
-      await registerAgentAccount(device);
+      if (binding) {
+        try { device.registered = (await agentAccountBinding(binding)).registered; }
+        catch { device.registered = false; }
+      } else await registerAgentAccount(device);
       agentQueue.rememberDevice(device);
       return json({ ok: true, poll_ms: agentPollMs, account_registered: device.registered });
     }
     if (request.method === 'GET' && url.pathname === '/agent/tasks') {
-      const deviceId = url.searchParams.get('device_id')?.trim().slice(0, 128) || '';
+      const deviceId = resolveDevice(url.searchParams.get('device_id')?.trim().slice(0, 128) || '');
       if (!deviceId) return json({ error: 'device_id required' }, 400);
+      if (binding) {
+        try { const status = await agentAccountBinding(binding); if (!status.registered || !status.can_reply) return json({ error: 'agent_account_unavailable' }, 403); }
+        catch { return json({ error: 'userio_binding_unavailable' }, 503); }
+      }
       const device = agentDevices.get(deviceId) || { id: deviceId, tasksDone: 0, tasksFailed: 0, lastSeen: 0 };
       device.lastSeen = Date.now(); agentDevices.set(deviceId, device);
       agentQueue.rememberDevice(device);
@@ -140,7 +188,7 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     if (request.method === 'POST' && url.pathname === '/agent/results') {
       const body = await request.json().catch(() => null) as { task_id?: unknown; device_id?: unknown; status?: unknown; error?: unknown } | null;
       const taskId = typeof body?.task_id === 'string' ? body.task_id : '';
-      const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
+      const deviceId = resolveDevice(typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '');
       if (!taskId || !deviceId || typeof body?.status !== 'string') return json({ error: 'task_id, device_id and status required' }, 400);
       const previous = agentQueue.get(taskId);
       if (!agentQueue.finish(deviceId, taskId, body.status, typeof body.error === 'string' ? body.error : undefined)) {
@@ -159,12 +207,20 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     }
     if (request.method === 'POST' && url.pathname === '/agent/inbound') {
       const body = await request.json().catch(() => null) as { device_id?: unknown; from?: unknown; body?: unknown; received_at?: unknown } | null;
-      const deviceId = typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '';
-      if (!deviceId || !validPhone(body?.from) || typeof body?.body !== 'string' || !body.body.trim()) {
-        return json({ error: 'device_id, from (E.164) and body required' }, 400);
+      const deviceId = resolveDevice(typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : '');
+      if (!deviceId || typeof body?.from !== 'string' || !body.from.trim() || body.from.length > 128 || typeof body?.body !== 'string' || !body.body.trim()) {
+        return json({ error: 'device_id, sender address and body required' }, 400);
       }
       const receivedMs = typeof body?.received_at === 'number' ? body.received_at : typeof body?.received_at === 'string' ? Date.parse(body.received_at) : Date.now();
       const id = hash(`${deviceId}:${body.from}:${receivedMs}:${body.body}`);
+      if (binding) {
+        try { const status = await agentAccountBinding(binding); if (!status.registered || !status.can_read) return json({ error: 'agent_account_unavailable' }, 403); }
+        catch { return json({ error: 'userio_binding_unavailable' }, 503); }
+        agentQueue.rememberInbound({ id,device_id:deviceId,account_id:binding.account_id,user_id:binding.user_id,
+          sender:body.from,body:body.body.slice(0,1600),received:Number.isFinite(receivedMs)?receivedMs:Date.now() });
+        void relayAgentInbound();
+        return json({ accepted: true, message_id: id });
+      }
       if (!inbound.some((stored) => stored.id === id)) {
         inbound.unshift({ id, from: body.from, body: body.body.slice(0, 1600), device_id: deviceId, receivedAt: new Date(Number.isFinite(receivedMs) ? receivedMs : Date.now()).toISOString() });
         inbound.splice(100);
@@ -191,6 +247,17 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     inbound.splice(100); return json({ accepted });
   }
   if (request.headers.get('authorization') !== `Bearer ${apiKey}`) return json({ error: 'unauthorized' }, 401);
+  if (request.method === 'POST' && url.pathname === '/v1/agent/enroll') {
+    const body = await request.json().catch(() => null) as any;
+    let binding: AgentBinding;
+    try { binding = enrollmentScope(typeof body?.user_id === 'string' ? body.user_id : '',
+      typeof body?.device_id === 'string' ? body.device_id : '', typeof body?.account_id === 'string' ? body.account_id : ''); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : 'invalid_agent_enrollment' }, 400); }
+    try {
+      if (!(await agentAccountBinding(binding)).registered) return json({ error: 'agent_account_not_registered' }, 403);
+      return json(agentQueue.enroll(binding), 201);
+    } catch { return json({ error: 'userio_binding_unavailable' }, 503); }
+  }
   if (request.method === 'GET' && url.pathname === '/v1/history') {
     // Two bounded SSH calls may take up to 60s. Bun's default 10s idle timer closes an active read early.
     server.timeout(request, 75);

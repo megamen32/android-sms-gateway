@@ -1,5 +1,46 @@
 {
   "entries": {
+    "apk-tenant-token-enrollment": {
+      "confidence": "verified",
+      "evidence": [
+        "Published APK1.1 code2 hash343cc17a verified; old runtime enrollRED not_found; two-user samephysical isolation + DB rotation/durable tests; callback503→sameID retry focusedGREEN"
+      ],
+      "git_head": "d95909cd6b9f3b020cd02f8bbd7d15197fff1680",
+      "key": "apk-tenant-token-enrollment",
+      "kind": "production-path",
+      "locations": [
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "fd53618e53a3d2b59a71bb8f38fa41eaaa573afc01ce1189c37c396a2627562f",
+          "path": "src/agent-queue.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "8cb0bb16e28be5f263bff4d47365c9109a4a8bb7931c1340a23785c6aaeaee9f",
+          "path": "src/server.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "369f5d817ce4766850e6e3fda34afbba078dcade1c761c0e116847e1ce4f0115",
+          "path": "src/agent-enrollment.test.ts",
+          "symbol": ""
+        },
+        {
+          "exists_at_verification": true,
+          "observed_kind": "file",
+          "observed_sha256": "050ed6e0b2d6826217ca79d330275a32f9cd0f9e2b6ff5877d55ec9aa359c570",
+          "path": "docs/API.md",
+          "symbol": ""
+        }
+      ],
+      "summary": "UserIO cookie owns account/route; internal /v1/agent/enroll persists device-token hash and tenant alias in AgentQueue. APK physical IDs unchanged; binding GET gates claims/inbound, normal UserIO ingress_user callback uses exact scopedaccount, durable retries in existing process. Legacy/native unchanged.",
+      "verified_at": "2026-10-12T03:44:39.729757+03:00"
+    },
     "native-history-in-place-pending-and-idle": {
       "confidence": "verified",
       "evidence": [
