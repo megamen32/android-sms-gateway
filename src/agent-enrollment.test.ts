@@ -22,6 +22,25 @@ test('device token rotation preserves tenant alias and durable ingress without s
   expect(queue.nextInbound()).toBeNull();queue.close();
 });
 
+test('five failing callback rows do not starve a later user and recovered retries keep their due order', () => {
+  const now=Date.now;
+  const path=`.tmp/agent-tests/fair-${crypto.randomUUID()}.sqlite`;
+  let clock=1000;Date.now=()=>clock;
+  const queue=new AgentQueue(path);
+  try {
+    for(let i=0;i<6;i++) queue.rememberInbound({id:`fixture-${i}`,device_id:'fixture',account_id:'fixture',user_id:'fixture',sender:'900',body:'fixture',received:i});
+    for(let i=0;i<5;i++) {
+      expect(queue.nextInbound()?.id).toBe(`fixture-${i}`);
+      queue.completeInbound(`fixture-${i}`,false);clock+=3000;
+    }
+    expect(queue.nextInbound()?.id).toBe('fixture-5');
+    queue.completeInbound('fixture-5',true);
+    clock+=3000;
+    queue.rememberInbound({id:'fixture-new',device_id:'fixture',account_id:'fixture',user_id:'fixture',sender:'900',body:'fixture',received:7});
+    expect(queue.nextInbound()?.id).toBe('fixture-0');
+  } finally {queue.close();Date.now=now;}
+});
+
 test('two users enroll existing APK fields and cannot claim or report each other; callbacks use exact registered account', async () => {
   const physical = 'android-00112233';
   const scope = (user:string) => ({ user_id:user,device_id:physical,account_id:`sms:user-${createHash('sha256').update(user).digest('hex').slice(0,16)}-${physical}` });

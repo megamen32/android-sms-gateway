@@ -60,11 +60,11 @@ export class AgentQueue {
       .get(device) as AgentBinding | null;
   }
   rememberInbound(message: AgentInbound): void {
-    this.db.query('INSERT OR IGNORE INTO agent_inbound (id,device_id,account_id,user_id,sender,body,received) VALUES (?,?,?,?,?,?,?)')
-      .run(message.id,message.device_id,message.account_id,message.user_id,message.sender,message.body,message.received);
+    this.db.query('INSERT OR IGNORE INTO agent_inbound (id,device_id,account_id,user_id,sender,body,received,retry_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(message.id,message.device_id,message.account_id,message.user_id,message.sender,message.body,message.received,Date.now());
   }
   nextInbound(): AgentInbound | null {
-    return this.db.query('SELECT * FROM agent_inbound WHERE delivered=0 AND retry_at<=? ORDER BY received LIMIT 1').get(Date.now()) as AgentInbound | null;
+    return this.db.query('SELECT * FROM agent_inbound WHERE delivered=0 AND retry_at<=? ORDER BY retry_at,received LIMIT 1').get(Date.now()) as AgentInbound | null;
   }
   completeInbound(id: string, delivered: boolean): void {
     this.db.query('UPDATE agent_inbound SET delivered=?,retry_at=? WHERE id=?').run(delivered ? 1 : 0,Date.now()+15_000,id);

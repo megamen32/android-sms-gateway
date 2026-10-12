@@ -44,6 +44,27 @@ external device, SMS, root account, credential or runtime mutation in tests.
 Exactsource inputs reviewed; APKsource/binary unchanged. Ready for scopedpublish
 and installation once root's protected bindingGET is verified live.
 
+e2dfa43 sourcepublished then installed03:59:45MSK/PID1086906. Verified protected
+UserIObinding dummyGET200/registeredfalse, exact native47dda/f18a receipts still
+sent, nativequeue4sent/1expired; live nativehistory after22 returned200/11.21s,
+snapshot22/next22/new0/pending[]. APK unchanged, phone/SMS/calls0. Found stale
+gateway USERIO_API_TOKEN causing401; refreshed ONLYthatprotectedslot from current
+canonicalUserIOservicecredential. Preserved600private environment/database
+rollback under .tmp/apk-user-enroll; no token/key values logged or published.
+Root owned fix of firstphone registration ordering before authoritative enroll.
+
+Delta failure shield: five old callbacks failing every15s could starve newerusers
+with ORDERreceived and3sticking. RED got fixture0 again instead of fixture5.
+Two-line maintainedSQLfix records initial due time and selects ORDERretry_at,
+received: fresh ready rows proceed, and recovered older due retries retain order.
+Standalone focusedunit1PASS3.71s; no physical/provider action. Expanded threecase
+run exceeded30s outerbudget/no summary and is explicitly NOTGREEN; prior22PASS
+and two-user19.18s results remain retained. No broad suite/replay is requested.
+Root finalwebsitecanary has frozen gateway e2/PID1086906. Delta sourcepublish may
+finish independently; install/restart only after Root captureFINISH, followed by
+owned metadata/receipt checks. Root optionalfakeincoming skip avoids extrahistory;
+normal webenrollment plus exactscopedping suffice for the current onboardingclaim.
+
 Delivery dependency: root's protected bindingGET/setup must be installed before
 gatewayenroll live path. Sourcepublish first; then onlygateway scopedrestart with
 acceptednativequeue/receipts preserved, protectedtwo-user fakehandshake/readback,
