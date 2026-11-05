@@ -119,3 +119,22 @@ Every `/v1/*` request needs `Authorization: Bearer <SMS_GATEWAY_API_KEY>`.
 `GET /v1/device` reports paired serial and ADB reachability. `GET /health` needs no key and is safe for a local health check.
 
 The Android agent posts inbox records to `POST /v1/device/inbound` with its separate device bearer token. `GET /v1/inbound` returns the last 100 received messages to the normal API client. Inbox data is memory-only in this first deployment and disappears on restart.
+
+
+## Read-only recovery of an original SMS send
+
+GET /v1/original-send requires the existing service Bearer API token, the
+**original** Idempotency-Key header, recipient_sha256 and body_sha256
+query parameters (hex SHA-256 of the exact submitted E.164 recipient and
+message), and device_id for an enrolled Android APK sender. Without
+device_id, the method addresses the configured default Termux-backed queue.
+
+The reader uses only the existing SQLite queue's durable key-to-task map.
+It never enqueues a task, polls Android or retries a send. A 200 response
+includes the original task ID, status, the exact device identity, and
+evidence only for confirmed native status sent. Sent proves a phone
+send callback/native transport acceptance, **not recipient delivery**.
+A 404 means the original task is not verifiably present, **not that the SMS
+was unsent**. Invalid scope is 400 and unauthorized requests are 401.
+Queued, sending, unknown, failed and expired cannot be promoted to success.
+Never issue POST /v1/messages to reconcile an unknown outcome.

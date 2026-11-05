@@ -296,6 +296,33 @@ Bun.serve({ port, hostname: process.env.HOST || '127.0.0.1', async fetch(request
     return json({ id, device_serial: verification.deviceSerial, status: verification.status,
       expiresAt: new Date(verification.expiresAt).toISOString() }, 201);
   }
+  if (request.method === 'GET' && url.pathname === '/v1/original-send') {
+    // Purely read-only original-key receipt lookup, scoped to exact device
+    // and original recipient/body SHA-256. Never enqueue or retry an SMS.
+    const key = request.headers.get('Idempotency-Key') || '';
+    const recipientHash = url.searchParams.get('recipient_sha256') || '';
+    const bodyHash = url.searchParams.get('body_sha256') || '';
+    const device = url.searchParams.get('device_id') || '';
+    if (!key || key.length > 200 ||
+        !/^[a-f0-9]{64}$/.test(recipientHash) ||
+        !/^[a-f0-9]{64}$/.test(bodyHash) ||
+        device.length > 128 || (device && !/^[a-zA-Z0-9._-]+$/.test(device))) {
+      return json({ error: 'exact_original_sms_binding_required' }, 400);
+    }
+    if (!device && !durableQueue) return json({ error: 'native_queue_unavailable' }, 503);
+    const original = device
+      ? agentQueue.originalByKey(key, device, recipientHash, bodyHash)
+      : durableQueue!.originalByKey(key, recipientHash, bodyHash);
+    if (!original) return json({ error: 'original_sms_unknown' }, 404);
+    return json({
+      id: original.id, status: original.status,
+      device_id: device || defaultSerial,
+      evidence: original.status === 'sent'
+        ? device ? 'android_sms_sent_callback' : 'termux_sms_sent'
+        : null,
+      recipient_delivery_confirmed: false,
+    });
+  }
   if (request.method === 'POST' && url.pathname === '/v1/messages') {
     const body = await request.json().catch(() => null) as {
       to?: unknown; body?: unknown; device_serial?: unknown; device_id?: unknown; expires_at?: unknown;

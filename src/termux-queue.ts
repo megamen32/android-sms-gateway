@@ -47,6 +47,19 @@ export class SmsQueue {
   get(id: string): Task | null {
     return this.db.query('SELECT * FROM sms_tasks WHERE id=?').get(id) as Task | null;
   }
+  originalByKey(key: string, recipientSha256: string,
+                bodySha256: string): Task | null {
+    // Read-only lookup of original at-most-once key and exact submitted data.
+    if (!key || key.length > 200 ||
+        !/^[a-f0-9]{64}$/.test(recipientSha256) ||
+        !/^[a-f0-9]{64}$/.test(bodySha256)) return null;
+    const dedupe = createHash('sha256').update('key:' + key).digest('hex');
+    const row = this.db.query('SELECT * FROM sms_tasks WHERE dedupe=?').get(dedupe) as Task | null;
+    if (!row || createHash('sha256').update(row.recipient).digest('hex') !== recipientSha256 ||
+        createHash('sha256').update(row.body).digest('hex') !== bodySha256) return null;
+    return row;
+  }
+
   counts(): Record<string, number> {
     return Object.fromEntries((this.db.query('SELECT status, COUNT(*) AS n FROM sms_tasks GROUP BY status').all() as
       { status: string; n: number }[]).map(row => [row.status, row.n]));
