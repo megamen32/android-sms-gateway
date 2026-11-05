@@ -86,6 +86,24 @@ export class AgentQueue {
   get(id: string): AgentTask | null {
     return this.db.query('SELECT *, recipient AS "to" FROM agent_tasks WHERE id=?').get(id) as AgentTask | null;
   }
+  originalByKey(key: string, device: string,
+                recipientSha256: string, bodySha256: string): AgentTask | null {
+    // Read-only query; no enqueue, claim or retry.
+    if (!key || key.length > 200 || !device ||
+        !/^[a-f0-9]{64}$/.test(recipientSha256) ||
+        !/^[a-f0-9]{64}$/.test(bodySha256)) return null;
+    const dedupe = createHash('sha256').update('key:' + key).digest('hex');
+    const row = this.db.query('SELECT *, recipient AS "to" FROM agent_tasks WHERE dedupe=?')
+      .get(dedupe) as AgentTask | null;
+    if (!row || row.type !== 'send_sms' || row.device_id !== device ||
+        !row.to || !row.body ||
+        createHash('sha256').update(row.to).digest('hex') !== recipientSha256 ||
+        createHash('sha256').update(row.body).digest('hex') !== bodySha256) {
+      return null;
+    }
+    return row;
+  }
+
   claim(device: string): AgentTask[] {
     return this.db.transaction(() => {
       this.db.query("UPDATE agent_tasks SET status='expired' WHERE status='queued_for_device' AND expires<=?").run(Date.now());
